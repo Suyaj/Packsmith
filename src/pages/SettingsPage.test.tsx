@@ -1,0 +1,155 @@
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import SettingsPage from "./SettingsPage";
+
+vi.mock("@tauri-apps/api/core", () => {
+  return {
+    invoke: vi.fn(),
+    Channel: class FakeChannel<T> {
+      onmessage: ((msg: T) => void) | null = null;
+    },
+  };
+});
+
+import { invoke } from "@tauri-apps/api/core";
+import "@/i18n";
+
+const mockInvoke = vi.mocked(invoke);
+
+import { ToolStatus } from "@/lib/toolchain";
+
+const fixtureStatuses: ToolStatus[] = [
+  { tool: "git", state: { state: "missing" }, canDownload: true },
+  {
+    tool: "jdk",
+    state: { state: "detected", path: "/usr/bin/java" },
+    canDownload: true,
+  },
+  {
+    tool: "mvnd",
+    state: { state: "managed", version: "1.0.6", path: "mvnd/bin/mvnd" },
+    canDownload: false,
+  },
+];
+
+function rowOf(toolText: string | RegExp): HTMLElement {
+  const heading = screen.getByRole("heading", { name: toolText });
+  return heading.closest("li") as HTMLElement;
+}
+
+beforeEach(() => {
+  mockInvoke.mockReset();
+});
+
+describe("设置页：托管工具链", () => {
+  it("展示 git / JDK / mvnd 三行及各自状态", async () => {
+    mockInvoke.mockResolvedValue(fixtureStatuses);
+    render(<SettingsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Git" })).toBeInTheDocument();
+    });
+    expect(rowOf("Git")).toHaveTextContent("缺失");
+    expect(rowOf(/^JDK/)).toHaveTextContent("已检测");
+    expect(rowOf("mvnd")).toHaveTextContent("已托管");
+    expect(rowOf("mvnd")).toHaveTextContent("1.0.6");
+  });
+
+  it("缺失与已检测的工具提供下载按钮，已托管不提供", async () => {
+    mockInvoke.mockResolvedValue(fixtureStatuses);
+    render(<SettingsPage />);
+
+    await waitFor(() => {
+      expect(
+        within(rowOf("Git")).getByRole("button", { name: "下载托管" }),
+      ).toBeInTheDocument();
+    });
+    expect(
+      within(rowOf(/^JDK/)).getByRole("button", { name: "下载托管" }),
+    ).toBeInTheDocument();
+    expect(
+      within(rowOf("mvnd")).queryByRole("button", { name: "下载托管" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("下载中展示进度，完成后状态刷新为已托管", async () => {
+    mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
+      if (cmd === "toolchain_status") return fixtureStatuses;
+      if (cmd === "toolchain_download") {
+        const channel = (args as { onProgress: { onmessage: (msg: unknown) => void } })?.onProgress;
+        channel.onmessage({ tool: "git", phase: "downloading", received: 50, total: 100 });
+        channel.onmessage({ tool: "git", phase: "extracting", received: 1, total: null });
+        const updated: ToolStatus = {
+          tool: "git",
+          state: { state: "managed", version: "2.47.1", path: "git/bin/git" },
+          canDownload: false,
+        };
+        return updated;
+      }
+      throw new Error(`unexpected command ${cmd}`);
+    });
+    render(<SettingsPage />);
+
+    await waitFor(() => {
+      expect(
+        within(rowOf("Git")).getByRole("button", { name: "下载托管" }),
+      ).toBeInTheDocument();
+    });
+    await userEvent.click(
+      within(rowOf("Git")).getByRole("button", { name: "下载托管" }),
+    );
+
+    await waitFor(() => {
+      expect(rowOf("Git")).toHaveTextContent("已托管");
+    });
+    expect(mockInvoke).toHaveBeenCalledWith("toolchain_download", expect.anything());
+    // 下载结束后按钮消失（已托管）
+    expect(
+      within(rowOf("Git")).queryByRole("button", { name: "下载托管" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("下载失败显示错误并可重试", async () => {
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "toolchain_status") return fixtureStatuses;
+      throw new Error("网络下载失败：连接超时");
+    });
+    render(<SettingsPage />);
+
+    await waitFor(() => {
+      expect(
+        within(rowOf("Git")).getByRole("button", { name: "下载托管" }),
+      ).toBeInTheDocument();
+    });
+    await userEvent.click(
+      within(rowOf("Git")).getByRole("button", { name: "下载托管" }),
+    );
+
+    expect(await screen.findByText(/网络下载失败：连接超时/)).toBeInTheDocument();
+    expect(
+      within(rowOf("Git")).getByRole("button", { name: "重试" }),
+    ).toBeInTheDocument();
+    expect(rowOf("Git")).not.toHaveTextContent("已托管");
+
+    // 重试成功
+    mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
+      if (cmd === "toolchain_status") return fixtureStatuses;
+      if (cmd === "toolchain_download") {
+        const channel = (args as { onProgress: { onmessage: (msg: unknown) => void } })?.onProgress;
+        channel.onmessage({ tool: "git", phase: "installing", received: 1, total: 1 });
+        return {
+          tool: "git",
+          state: { state: "managed", version: "2.47.1", path: "git/bin/git" },
+          canDownload: false,
+        } satisfies ToolStatus;
+      }
+      throw new Error(`unexpected command ${cmd}`);
+    });
+    await userEvent.click(within(rowOf("Git")).getByRole("button", { name: "重试" }));
+
+    await waitFor(() => {
+      expect(rowOf("Git")).toHaveTextContent("已托管");
+    });
+  });
+});
