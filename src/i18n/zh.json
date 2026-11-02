@@ -14,7 +14,56 @@
   },
   "projects": {
     "title": "项目管理",
-    "empty": "暂无项目"
+    "empty": "暂无项目",
+    "refresh": "刷新",
+    "refreshPlaceholder": "刷新（v1 预留，暂未实现远程刷新）",
+    "listTitle": "项目列表",
+    "columns": {
+      "name": "名称",
+      "source": "来源",
+      "type": "类型"
+    },
+    "source": {
+      "git": "Git",
+      "local": "本地"
+    },
+    "type": {
+      "maven": "Maven（Java）",
+      "gradle": "Gradle"
+    },
+    "create": {
+      "button": "新建项目",
+      "title": "创建项目",
+      "modeClone": "新建（clone git 仓库）",
+      "modeImport": "导入已有本地路径",
+      "name": "项目名称",
+      "type": "项目类型",
+      "typeMaven": "Maven（Java）",
+      "typeGradle": "Gradle（暂不支持）",
+      "gitUrl": "Git 仓库地址",
+      "workspaceRoot": "工作区根目录",
+      "localPath": "本地路径",
+      "cloning": "正在克隆…",
+      "cloningProgress": "正在克隆… {{received}}/{{total}}",
+      "submitClone": "克隆并创建",
+      "submitImport": "导入",
+      "cancel": "取消",
+      "cancelClone": "取消克隆"
+    },
+    "errors": {
+      "duplicate_name": "已存在同名项目",
+      "duplicate_url": "已存在相同 Git 地址的项目",
+      "duplicate_path": "已存在相同本地路径的项目",
+      "path_not_found": "本地路径不存在或不是目录",
+      "invalid_name": "项目名称不能为空且不能包含路径分隔符",
+      "directory_exists": "目标目录已存在，请更换项目名称或工作区",
+      "invalid_type": "不支持的项目类型",
+      "clone_failed": "克隆失败：{{message}}",
+      "cancelled": "克隆已取消",
+      "store": "数据保存失败",
+      "io": "读写磁盘失败：{{message}}",
+      "unknown": "操作失败：{{message}}"
+    }
   },
   "servers": {
     "title": "服务器管理",

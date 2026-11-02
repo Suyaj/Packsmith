@@ -7,6 +7,8 @@
 
 /// Encryption key lifecycle: generation + OS-keychain storage.
 pub mod key;
+/// 项目 (Project) records: persistence, validation, clone + import flows.
+pub mod projects;
 mod migrations;
 
 use std::path::Path;
