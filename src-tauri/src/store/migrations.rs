@@ -14,11 +14,33 @@ pub(crate) struct Migration {
 }
 
 /// Append-only list: never edit an applied migration, only add new ones.
-pub(crate) const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "baseline: app_meta key/value table",
-    sql: "CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
-}];
+pub(crate) const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "baseline: app_meta key/value table",
+        sql: "CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+    },
+    Migration {
+        version: 2,
+        name: "ticket 04: servers + known_hosts (accepted fingerprints)",
+        sql: "CREATE TABLE servers (
+            id INTEGER PRIMARY KEY,
+            host TEXT NOT NULL,
+            port INTEGER NOT NULL DEFAULT 22,
+            username TEXT NOT NULL,
+            auth_method TEXT NOT NULL CHECK (auth_method IN ('private_key', 'password')),
+            password TEXT,
+            private_key_path TEXT,
+            private_key_passphrase TEXT
+        );
+        CREATE TABLE known_hosts (
+            host TEXT NOT NULL,
+            port INTEGER NOT NULL,
+            fingerprint TEXT NOT NULL,
+            PRIMARY KEY (host, port)
+        );",
+    },
+];
 
 pub(crate) const LATEST_SCHEMA_VERSION: i32 = MIGRATIONS[MIGRATIONS.len() - 1].version;
 
