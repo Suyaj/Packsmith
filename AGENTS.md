@@ -1,0 +1,26 @@
+# Packsmith
+
+## Project overview
+
+Packsmith 是一个打包的桌面应用（当前支持 Java 打包，后续支持其他项目类型）。
+
+- **基础框架**: Tauri（Rust 后端 + WebView 前端）
+- **UI**: shadcn-ui
+- **首页**: 包含其他页面的相关信息（入口/总览）
+- **项目管理**: 支持多种项目类型，目前只实现 Java 相关——通过 git 获取项目，使用 mvnd 进行打包
+- **服务器管理**: 用于打包文件的上传与命令行启动相关操作，需要 SSH 管理
+- **设置**: 当前项目的版本信息，git、mvnd、java 等第三方工具依赖的检查和下载
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as local markdown files under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default canonical triage labels (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `GLOSSARY.md` + `docs/adr/`. See `docs/agents/domain.md`.
