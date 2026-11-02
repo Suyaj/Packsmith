@@ -1,0 +1,27 @@
+{
+  "app": {
+    "name": "Packsmith"
+  },
+  "nav": {
+    "home": "首页",
+    "projects": "项目管理",
+    "servers": "服务器管理",
+    "settings": "设置"
+  },
+  "home": {
+    "title": "首页",
+    "empty": "暂无打包记录"
+  },
+  "projects": {
+    "title": "项目管理",
+    "empty": "暂无项目"
+  },
+  "servers": {
+    "title": "服务器管理",
+    "empty": "暂无服务器"
+  },
+  "settings": {
+    "title": "设置",
+    "empty": "设置项即将可用"
+  }
+}
