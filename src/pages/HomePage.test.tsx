@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import HomePage from "./HomePage";
@@ -62,6 +62,22 @@ describe("首页：最近打包记录", () => {
     expect(rows[0]).toHaveTextContent("成功");
     expect(rows[1]).toHaveTextContent("alpha");
     expect(rows[1]).toHaveTextContent("失败");
+  });
+
+  // 详情 = 构建历史页里展开该条目的日志（HistoryPage 支持 ?entry= 深链）。
+  it("每条记录可点击跳转到构建历史详情", async () => {
+    mockInvoke.mockResolvedValue(entries);
+
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    const rows = await screen.findAllByTestId("recent-build-row");
+    const links = within(rows[0]).getAllByRole("link");
+    expect(links[0]).toHaveAttribute("href", "/history?entry=2");
+    expect(within(rows[1]).getAllByRole("link")[0]).toHaveAttribute("href", "/history?entry=1");
   });
 
   it("无打包记录时展示空状态", async () => {

@@ -62,7 +62,12 @@ function HomePage() {
                   data-testid="recent-build-row"
                   className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2 text-sm"
                 >
-                  <span className="font-medium">{entry.project_name}</span>
+                  <Link
+                    to={`/history?entry=${entry.id}`}
+                    className="font-medium hover:underline"
+                  >
+                    {entry.project_name}
+                  </Link>
                   <span className="text-muted-foreground">{entry.branch}</span>
                   <span className="text-muted-foreground">
                     {formatTime(entry.created_at)}
@@ -76,6 +81,12 @@ function HomePage() {
                       {t("history.resultFailed", { code: entry.exit_code ?? "-" })}
                     </span>
                   )}
+                  <Link
+                    to={`/history?entry=${entry.id}`}
+                    className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    {t("home.viewDetail")}
+                  </Link>
                 </li>
               ))}
             </ul>

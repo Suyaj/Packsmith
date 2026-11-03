@@ -13,7 +13,22 @@
     "title": "首页",
     "empty": "暂无打包记录",
     "recentBuilds": "最近打包记录",
-    "viewAll": "查看全部"
+    "viewAll": "查看全部",
+    "viewDetail": "查看详情",
+    "quickBuild": "快速发起打包",
+    "quickBuildPick": "选择项目",
+    "quickBuildStart": "打包",
+    "quickBuildEmpty": "还没有项目，请先在项目管理页新建",
+    "quickBuildGoProjects": "去项目管理",
+    "serversOverview": "服务器概览",
+    "serversEmpty": "暂无服务器",
+    "serversGoManage": "管理服务器",
+    "serverReachable": "连接正常",
+    "serverUnreachable": "无法连接",
+    "serverChecking": "检测中…",
+    "serverCheck": "重新检测",
+    "serverLastDeploy": "最近部署",
+    "serverNeverDeployed": "从未部署"
   },
   "history": {
     "title": "构建历史",

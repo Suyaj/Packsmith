@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import {
@@ -42,6 +43,7 @@ function formatTime(iso: string): string {
  */
 function HistoryPage() {
   const { t } = useTranslation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [entries, setEntries] = useState<HistoryEntry[] | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectFilter, setProjectFilter] = useState<string>("");
@@ -77,6 +79,25 @@ function HistoryPage() {
       .then(setProjects)
       .catch(() => setProjects([]));
   }, []);
+
+  // 首页最近打包记录的深链（?entry=<id>）：直达该条目的日志详情，
+  // 展开后清掉参数，避免后续筛选/刷新时反复弹出。
+  const deepLinkEntryId = searchParams.get("entry");
+  useEffect(() => {
+    if (deepLinkEntryId === null || entries === null) return;
+    const entry = entries.find((e) => String(e.id) === deepLinkEntryId);
+    setSearchParams({}, { replace: true });
+    if (!entry) return;
+    readBuildLog(entry.build_id)
+      .then((text) => {
+        setLogText(text);
+        setOpenLogId(entry.id);
+      })
+      .catch(() => {
+        // 日志可能已被清理：保持列表可见即可
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deepLinkEntryId, entries]);
 
   async function handleViewLog(entry: HistoryEntry) {
     if (openLogId === entry.id) {
