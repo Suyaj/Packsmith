@@ -16,6 +16,8 @@ pub struct TargetDto {
     pub upload_dir: String,
     pub start_commands: String,
     pub stop_commands: String,
+    /// 构建成功后自动连锁部署 (ticket 10, 默认关).
+    pub auto_deploy: bool,
 }
 
 impl From<&Target> for TargetDto {
@@ -27,6 +29,7 @@ impl From<&Target> for TargetDto {
             upload_dir: t.upload_dir.clone(),
             start_commands: t.start_commands.clone(),
             stop_commands: t.stop_commands.clone(),
+            auto_deploy: t.auto_deploy,
         }
     }
 }
@@ -71,6 +74,7 @@ pub fn update_deployment_target(
     upload_dir: String,
     start_commands: String,
     stop_commands: String,
+    auto_deploy: bool,
 ) -> Result<TargetDto, String> {
     let target = Target {
         id,
@@ -79,6 +83,7 @@ pub fn update_deployment_target(
         upload_dir,
         start_commands,
         stop_commands,
+        auto_deploy,
     };
     repo::update(&store, &target)
         .map_err(|e| e.to_string())
@@ -88,4 +93,14 @@ pub fn update_deployment_target(
 #[tauri::command]
 pub fn delete_deployment_target(store: State<'_, Store>, id: i64) -> Result<bool, String> {
     repo::delete(&store, id).map_err(|e| e.to_string())
+}
+
+/// 切换“构建成功后自动连锁部署”开关（ticket 10）。返回目标是否存在。
+#[tauri::command]
+pub fn set_target_auto_deploy(
+    store: State<'_, Store>,
+    id: i64,
+    enabled: bool,
+) -> Result<bool, String> {
+    repo::set_auto_deploy(&store, id, enabled).map_err(|e| e.to_string())
 }

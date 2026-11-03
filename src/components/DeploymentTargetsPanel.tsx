@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { listServers, type Server } from "@/lib/serversApi";
+import { setTargetAutoDeploy } from "@/lib/deployApi";
 import {
   createDeploymentTarget,
   deleteDeploymentTarget,
@@ -111,6 +112,7 @@ function DeploymentTargetsPanel({
     uploadDir: f.uploadDir.trim(),
     startCommands: f.startCommands,
     stopCommands: f.stopCommands,
+    autoDeploy: targets.find((t) => t.id === f.editingId)?.autoDeploy ?? false,
   });
 
   const formValid = (f: FormState) =>
@@ -132,6 +134,17 @@ function DeploymentTargetsPanel({
       const code = isBackendError(e) ? e.code : "unknown";
       const message = isBackendError(e) ? e.message : String(e);
       setSaveError(t(`targets.errors.${code}`, { message }));
+    }
+  };
+
+  const handleToggleAutoDeploy = async (target: Target, enabled: boolean) => {
+    try {
+      await setTargetAutoDeploy(target.id, enabled);
+      setTargets((prev) =>
+        prev.map((t) => (t.id === target.id ? { ...t, autoDeploy: enabled } : t)),
+      );
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -284,6 +297,17 @@ function DeploymentTargetsPanel({
                   <p className="mt-1 text-sm">
                     {t("targets.uploadDirValue", { value: target.uploadDir })}
                   </p>
+                  <label className="mt-2 flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      data-testid={`auto-deploy-toggle-${target.id}`}
+                      checked={target.autoDeploy}
+                      onChange={(e) =>
+                        void handleToggleAutoDeploy(target, e.target.checked)
+                      }
+                    />
+                    {t("targets.autoDeploy")}
+                  </label>
                   <div className="mt-1 text-sm">
                     <span>{t("targets.startCommands")}</span>
                     <pre

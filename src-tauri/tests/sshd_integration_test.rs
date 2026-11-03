@@ -21,10 +21,9 @@
 //! - key-file credential -> Success (only when PACKSMITH_SSH_TEST_KEY set)
 
 use packsmith_lib::server::repo::{self, Credential};
-use packsmith_lib::server::ssh::{test_connection, TestOutcome, TestRequest};
+use packsmith_lib::server::ssh::{TestOutcome, TestRequest, test_connection};
 
-const TEST_KEY_HEX: &str =
-    "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
+const TEST_KEY_HEX: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
 
 struct SshEnv {
     host: String,
@@ -70,24 +69,37 @@ fn block_on<F: std::future::Future>(fut: F) -> F::Output {
 #[test]
 fn correct_password_succeeds_and_stores_accepted_fingerprint() {
     let Some(env) = ssh_env() else { return };
-    let Some(password) = env.password.clone() else { return };
+    let Some(password) = env.password.clone() else {
+        return;
+    };
     let dir = tempfile::tempdir().unwrap();
     let store = packsmith_lib::store::Store::open(&dir.path().join("db"), TEST_KEY_HEX).unwrap();
 
     // First attempt without opt-in: the unknown host key must stop us even
     // though the credential is correct.
-    let outcome = block_on(test_connection(&password_request(&env, &password), None, false));
+    let outcome = block_on(test_connection(
+        &password_request(&env, &password),
+        None,
+        false,
+    ));
     let fingerprint = match outcome {
         TestOutcome::HostKeyUnknown { fingerprint } => fingerprint,
         other => panic!("expected HostKeyUnknown on first contact, got {other:?}"),
     };
-    assert!(repo::known_host_fingerprint(&store, &env.host, env.port)
-        .unwrap()
-        .is_none(), "a rejected host key must not be stored");
+    assert!(
+        repo::known_host_fingerprint(&store, &env.host, env.port)
+            .unwrap()
+            .is_none(),
+        "a rejected host key must not be stored"
+    );
 
     // User accepts -> re-test with opt-in -> success, and the fingerprint is
     // handed back for storage.
-    let outcome = block_on(test_connection(&password_request(&env, &password), None, true));
+    let outcome = block_on(test_connection(
+        &password_request(&env, &password),
+        None,
+        true,
+    ));
     match outcome {
         TestOutcome::Success { new_fingerprint } => {
             assert_eq!(new_fingerprint.as_deref(), Some(fingerprint.as_str()));
@@ -99,9 +111,18 @@ fn correct_password_succeeds_and_stores_accepted_fingerprint() {
     // Later tests against the same server succeed with no opt-in: the
     // stored fingerprint is accepted transparently.
     let stored = repo::known_host_fingerprint(&store, &env.host, env.port).unwrap();
-    let outcome = block_on(test_connection(&password_request(&env, &password), stored.as_deref(), false));
+    let outcome = block_on(test_connection(
+        &password_request(&env, &password),
+        stored.as_deref(),
+        false,
+    ));
     assert!(
-        matches!(outcome, TestOutcome::Success { new_fingerprint: None }),
+        matches!(
+            outcome,
+            TestOutcome::Success {
+                new_fingerprint: None
+            }
+        ),
         "known fingerprint must not be re-stored, got {outcome:?}"
     );
 }
@@ -111,7 +132,8 @@ fn wrong_password_fails_with_concrete_auth_reason() {
     let Some(env) = ssh_env() else { return };
     let dir = tempfile::tempdir().unwrap();
     let store = packsmith_lib::store::Store::open(&dir.path().join("db"), TEST_KEY_HEX).unwrap();
-    let stored = repo::known_host_fingerprint(&store, &env.host, env.port).unwrap()
+    let stored = repo::known_host_fingerprint(&store, &env.host, env.port)
+        .unwrap()
         .or_else(|| std::env::var("PACKSMITH_SSH_TEST_FINGERPRINT").ok());
 
     let outcome = block_on(test_connection(
@@ -131,7 +153,9 @@ fn wrong_password_fails_with_concrete_auth_reason() {
 #[test]
 fn correct_key_succeeds_and_stores_accepted_fingerprint() {
     let Some(env) = ssh_env() else { return };
-    let Some(key_path) = env.key_path.clone() else { return };
+    let Some(key_path) = env.key_path.clone() else {
+        return;
+    };
     let passphrase = std::env::var("PACKSMITH_SSH_TEST_KEY_PASSPHRASE").ok();
     let dir = tempfile::tempdir().unwrap();
     let store = packsmith_lib::store::Store::open(&dir.path().join("db"), TEST_KEY_HEX).unwrap();
@@ -167,7 +191,12 @@ fn correct_key_succeeds_and_stores_accepted_fingerprint() {
     let stored = repo::known_host_fingerprint(&store, &env.host, env.port).unwrap();
     let outcome = block_on(test_connection(&request, stored.as_deref(), false));
     assert!(
-        matches!(outcome, TestOutcome::Success { new_fingerprint: None }),
+        matches!(
+            outcome,
+            TestOutcome::Success {
+                new_fingerprint: None
+            }
+        ),
         "known fingerprint must not be re-stored, got {outcome:?}"
     );
 }
@@ -179,7 +208,15 @@ fn wrong_key_fails_with_concrete_auth_reason() {
     let key_dir = tempfile::tempdir().unwrap();
     let unknown_key = key_dir.path().join("unknown_key");
     let status = std::process::Command::new("ssh-keygen")
-        .args(["-t", "ed25519", "-N", "", "-f", unknown_key.to_str().unwrap(), "-q"])
+        .args([
+            "-t",
+            "ed25519",
+            "-N",
+            "",
+            "-f",
+            unknown_key.to_str().unwrap(),
+            "-q",
+        ])
         .status()
         .expect("ssh-keygen must be available on dev machines");
     assert!(status.success());
@@ -206,4 +243,3 @@ fn wrong_key_fails_with_concrete_auth_reason() {
         other => panic!("expected AuthFailed for an unknown key, got {other:?}"),
     }
 }
-

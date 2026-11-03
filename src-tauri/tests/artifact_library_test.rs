@@ -44,7 +44,10 @@ fn 扫描单模块target_只认jar与war构件() {
     // 干扰项：classes、文本、源码目录里的 jar 都不算构件。
     write_file(&ws.path().join("target/classes/App.class"), b"class");
     write_file(&ws.path().join("target/README.txt"), b"txt");
-    write_file(&ws.path().join("src/lib/not-a-build-output.jar"), b"src jar");
+    write_file(
+        &ws.path().join("src/lib/not-a-build-output.jar"),
+        b"src jar",
+    );
 
     let found = scan_workspace_artifacts(ws.path());
 
@@ -69,7 +72,10 @@ fn 扫描多模块工程_每个模块的target都被覆盖() {
     let rels: Vec<String> = found.iter().map(|a| a.relative_path.clone()).collect();
     assert_eq!(
         rels,
-        vec!["module-a/target/a-api-2.0.jar", "module-b/target/b-web-2.0.war"]
+        vec![
+            "module-a/target/a-api-2.0.jar",
+            "module-b/target/b-web-2.0.war"
+        ]
     );
 }
 
@@ -92,10 +98,10 @@ fn 扫描对不存在的目录返回空而不是报错() {
 // 构建历史（持久化）
 // ---------------------------------------------------------------------------
 
+use packsmith_lib::store::Store;
 use packsmith_lib::store::history::{self, NewHistoryEntry};
 use packsmith_lib::store::projects::{self, ProjectType};
 use packsmith_lib::store::settings;
-use packsmith_lib::store::Store;
 
 const TEST_KEY_HEX: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
 
@@ -104,13 +110,18 @@ fn open_store(dir: &Path) -> Store {
 }
 
 /// 导入一个项目；本地路径必须存在且各不相同，用 `<dir>/<name>`。
-fn import_project(store: &Store, dir: &Path, name: &str) -> packsmith_lib::store::projects::Project {
+fn import_project(
+    store: &Store,
+    dir: &Path,
+    name: &str,
+) -> packsmith_lib::store::projects::Project {
     let path = dir.join(name);
     std::fs::create_dir_all(&path).unwrap();
     projects::import(store, name, &path, ProjectType::Maven).unwrap()
 }
 
-fn new_entry(project_id: i64, build_id: &str, success: bool) -> NewHistoryEntry {    NewHistoryEntry {
+fn new_entry(project_id: i64, build_id: &str, success: bool) -> NewHistoryEntry {
+    NewHistoryEntry {
         build_id: build_id.to_string(),
         project_id,
         branch: "main".to_string(),
@@ -143,7 +154,11 @@ fn 历史列表_跨项目_最近在前() {
     assert_eq!(first.exit_code, Some(0));
     assert_eq!(first.branch, "main");
     assert_eq!(first.log_path, "/appdata/build-logs/build-3-c.log");
-    assert!(first.created_at.contains("T"), "created_at: {}", first.created_at);
+    assert!(
+        first.created_at.contains("T"),
+        "created_at: {}",
+        first.created_at
+    );
 
     // limit 只取最近 N 条。
     let top1 = history::list(&store, Some(1)).unwrap();
@@ -244,11 +259,7 @@ fn 手动清理_清空项目全部历史与文件_不影响其他项目() {
     let p1 = import_project(&store, dir.path(), "one");
     let p2 = import_project(&store, dir.path(), "two");
 
-    for (name, p, bid) in [
-        ("one", &p1, "b1"),
-        ("one", &p1, "b2"),
-        ("two", &p2, "b3"),
-    ] {
+    for (name, p, bid) in [("one", &p1, "b1"), ("one", &p1, "b2"), ("two", &p2, "b3")] {
         let artifacts_dir = appdata.join(format!("artifacts/{name}/20261103-120000-{bid}"));
         std::fs::create_dir_all(&artifacts_dir).unwrap();
         history::record(
@@ -267,7 +278,10 @@ fn 手动清理_清空项目全部历史与文件_不影响其他项目() {
     let rows = history::list(&store, None).unwrap();
     let build_ids: Vec<&str> = rows.iter().map(|r| r.build_id.as_str()).collect();
     assert_eq!(build_ids, vec!["b3"], "其他项目的历史不受影响");
-    assert!(!appdata.join("artifacts/one").exists(), "被清理项目的构件目录应消失");
+    assert!(
+        !appdata.join("artifacts/one").exists(),
+        "被清理项目的构件目录应消失"
+    );
     assert!(appdata.join("artifacts/two").exists());
 }
 
@@ -279,7 +293,10 @@ fn 删除项目时历史记录级联删除() {
     history::record(&store, &new_entry(project.id, "build-1", true)).unwrap();
 
     store
-        .with(|conn| conn.execute("DELETE FROM projects WHERE id = ?1", [project.id]).map(|_| ()))
+        .with(|conn| {
+            conn.execute("DELETE FROM projects WHERE id = ?1", [project.id])
+                .map(|_| ())
+        })
         .unwrap();
 
     assert!(history::list(&store, None).unwrap().is_empty());
@@ -346,12 +363,20 @@ fn 默认构件选择_被记住并可更新() {
     assert!(project.default_artifact.is_none());
     projects::set_default_artifact(&store, project.id, "app-1.0.jar").unwrap();
     assert_eq!(
-        projects::get(&store, project.id).unwrap().unwrap().default_artifact.as_deref(),
+        projects::get(&store, project.id)
+            .unwrap()
+            .unwrap()
+            .default_artifact
+            .as_deref(),
         Some("app-1.0.jar")
     );
     projects::set_default_artifact(&store, project.id, "other.war").unwrap();
     assert_eq!(
-        projects::get(&store, project.id).unwrap().unwrap().default_artifact.as_deref(),
+        projects::get(&store, project.id)
+            .unwrap()
+            .unwrap()
+            .default_artifact
+            .as_deref(),
         Some("other.war")
     );
 }
@@ -364,7 +389,11 @@ use packsmith_lib::build::{self, BuildEvent};
 use std::sync::{Arc, Mutex};
 
 /// 本地 git 仓库（项目源）+ 已注册项目。
-fn fixture_project(dir: &Path, store: &Store, name: &str) -> packsmith_lib::store::projects::Project {
+fn fixture_project(
+    dir: &Path,
+    store: &Store,
+    name: &str,
+) -> packsmith_lib::store::projects::Project {
     let repo_path = dir.join(name);
     let repo = git2::Repository::init(&repo_path).unwrap();
     std::fs::write(repo_path.join("pom.xml"), "<project/>").unwrap();
@@ -451,7 +480,12 @@ fn workspaces_in(root: &Path) -> Vec<PathBuf> {
             entries
                 .flatten()
                 .map(|e| e.path())
-                .filter(|p| p.file_name().unwrap().to_string_lossy().starts_with("packsmith-build-"))
+                .filter(|p| {
+                    p.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with("packsmith-build-")
+                })
                 .collect()
         })
         .unwrap_or_default()
@@ -490,7 +524,12 @@ async fn 成功构建_构件先入库后删工作区_历史落记录_单构件�
     assert!(outcome.success);
 
     // 构件已入库：`<appdata>/artifacts/<项目>/<构建时间>/`，内容与 target 一致。
-    let lib_dir = PathBuf::from(outcome.artifacts_dir.as_ref().expect("成功构建必须有构件目录"));
+    let lib_dir = PathBuf::from(
+        outcome
+            .artifacts_dir
+            .as_ref()
+            .expect("成功构建必须有构件目录"),
+    );
     assert!(
         lib_dir.starts_with(fx.appdata.join("artifacts/demo-app")),
         "库目录应在 artifacts/<项目>/ 下: {lib_dir:?}"
@@ -508,7 +547,10 @@ async fn 成功构建_构件先入库后删工作区_历史落记录_单构件�
     let row = &rows[0];
     assert!(row.success);
     assert_eq!(row.branch, "main");
-    assert_eq!(row.artifacts_dir.as_deref(), Some(lib_dir.to_str().unwrap()));
+    assert_eq!(
+        row.artifacts_dir.as_deref(),
+        Some(lib_dir.to_str().unwrap())
+    );
     assert!(Path::new(&row.log_path).is_file());
     assert_eq!(outcome.history_id, Some(row.id));
 
@@ -564,11 +606,21 @@ async fn 失败构建_历史落失败记录_无构件目录() {
     assert!(!rows[0].success);
     assert_eq!(rows[0].exit_code, Some(3));
     assert!(rows[0].artifacts_dir.is_none());
-    assert!(Path::new(&rows[0].log_path).is_file(), "失败构建的日志仍留存");
+    assert!(
+        Path::new(&rows[0].log_path).is_file(),
+        "失败构建的日志仍留存"
+    );
     assert!(workspaces_in(&fx.temp_root).is_empty());
     // 失败构建不留构件目录。
     assert!(
-        !fx.appdata.join("artifacts").exists() || fx.appdata.join("artifacts").read_dir().unwrap().next().is_none()
+        !fx.appdata.join("artifacts").exists()
+            || fx
+                .appdata
+                .join("artifacts")
+                .read_dir()
+                .unwrap()
+                .next()
+                .is_none()
     );
 }
 
@@ -587,9 +639,16 @@ async fn 保留策略在入库后执行_超出N次的旧构建连文件清理() 
     assert_eq!(build_ids.len(), 1, "保留 1 次：只剩最近一次");
     assert_eq!(rows[0].build_id, second.build_id);
 
-    assert!(!PathBuf::from(first.artifacts_dir.unwrap()).exists(), "旧构件目录被清理");
+    assert!(
+        !PathBuf::from(first.artifacts_dir.unwrap()).exists(),
+        "旧构件目录被清理"
+    );
     assert!(!Path::new(first.log_path.as_str()).exists(), "旧日志被清理");
-    assert!(PathBuf::from(second.artifacts_dir.unwrap()).join("app-1.0.jar").is_file());
+    assert!(
+        PathBuf::from(second.artifacts_dir.unwrap())
+            .join("app-1.0.jar")
+            .is_file()
+    );
     assert!(workspaces_in(&fx.temp_root).is_empty());
 }
 
@@ -607,7 +666,9 @@ async fn 构建进程环境_依赖仓库指向应用数据目录_用户m2零污�
 
     // 用户 ~/.m2 顶层两层快照（打包前后内容不变，ADR-0001 验收）。
     fn snapshot(root: &Path, depth: usize, out: &mut Vec<PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(root) else { return };
+        let Ok(entries) = std::fs::read_dir(root) else {
+            return;
+        };
         for e in entries.flatten() {
             out.push(e.path());
             if depth > 0 && e.file_type().map(|t| t.is_dir()).unwrap_or(false) {

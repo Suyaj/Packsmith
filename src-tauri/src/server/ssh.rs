@@ -73,11 +73,7 @@ pub enum HostKeyCheck {
 }
 
 /// Pure host-key policy. Unit-tested without network.
-pub fn check_host_key(
-    stored: Option<&str>,
-    presented: &str,
-    accept_unknown: bool,
-) -> HostKeyCheck {
+pub fn check_host_key(stored: Option<&str>, presented: &str, accept_unknown: bool) -> HostKeyCheck {
     match stored {
         Some(fp) if fp == presented => HostKeyCheck::Accept,
         Some(_) => HostKeyCheck::RejectChanged,
@@ -86,7 +82,9 @@ pub fn check_host_key(
     }
 }
 
-fn fingerprint_of(key: &russh::keys::PublicKeyOrCertificate) -> String {
+/// SHA-256 fingerprint of a presented key in OpenSSH known_hosts format
+/// (`SHA256:...`). Shared with the deploy transport (ticket 10).
+pub(crate) fn fingerprint_of(key: &russh::keys::PublicKeyOrCertificate) -> String {
     key.public_key().fingerprint(HashAlg::Sha256).to_string()
 }
 
@@ -107,12 +105,10 @@ impl russh::client::Handler for RecordingHandler {
     ) -> Result<bool, Self::Error> {
         let fingerprint = fingerprint_of(server_public_key);
         *self.presented.lock().unwrap() = Some(fingerprint.clone());
-        Ok(
-            matches!(
-                check_host_key(self.stored.as_deref(), &fingerprint, self.accept_unknown),
-                HostKeyCheck::Accept
-            ),
-        )
+        Ok(matches!(
+            check_host_key(self.stored.as_deref(), &fingerprint, self.accept_unknown),
+            HostKeyCheck::Accept
+        ))
     }
 }
 
@@ -126,10 +122,18 @@ pub async fn test_connection(
     stored_fingerprint: Option<&str>,
     accept_unknown_host_key: bool,
 ) -> TestOutcome {
-    match tokio::time::timeout(TEST_TIMEOUT, run_test(req, stored_fingerprint, accept_unknown_host_key)).await {
+    match tokio::time::timeout(
+        TEST_TIMEOUT,
+        run_test(req, stored_fingerprint, accept_unknown_host_key),
+    )
+    .await
+    {
         Ok(outcome) => outcome,
         Err(_) => TestOutcome::Unreachable {
-            detail: format!("connection attempt timed out after {}s", TEST_TIMEOUT.as_secs()),
+            detail: format!(
+                "connection attempt timed out after {}s",
+                TEST_TIMEOUT.as_secs()
+            ),
         },
     }
 }
@@ -193,7 +197,11 @@ async fn run_test(
         Credential::Password { password } => {
             match handle.authenticate_password(&req.username, password).await {
                 Ok(result) => result,
-                Err(e) => return TestOutcome::Unreachable { detail: e.to_string() },
+                Err(e) => {
+                    return TestOutcome::Unreachable {
+                        detail: e.to_string(),
+                    };
+                }
             }
         }
         Credential::PrivateKey { path, passphrase } => {
@@ -202,18 +210,33 @@ async fn run_test(
             // free of shared mutable key state).
             let key = match russh::keys::load_secret_key(path, passphrase.as_deref()) {
                 Ok(key) => key,
-                Err(e) => return TestOutcome::KeyUnreadable { detail: e.to_string() },
+                Err(e) => {
+                    return TestOutcome::KeyUnreadable {
+                        detail: e.to_string(),
+                    };
+                }
             };
             let hash = match handle.best_supported_rsa_hash().await {
                 Ok(hash) => hash.flatten(),
-                Err(e) => return TestOutcome::Unreachable { detail: e.to_string() },
+                Err(e) => {
+                    return TestOutcome::Unreachable {
+                        detail: e.to_string(),
+                    };
+                }
             };
             match handle
-                .authenticate_publickey(&req.username, PrivateKeyWithHashAlg::new(Arc::new(key), hash))
+                .authenticate_publickey(
+                    &req.username,
+                    PrivateKeyWithHashAlg::new(Arc::new(key), hash),
+                )
                 .await
             {
                 Ok(result) => result,
-                Err(e) => return TestOutcome::Unreachable { detail: e.to_string() },
+                Err(e) => {
+                    return TestOutcome::Unreachable {
+                        detail: e.to_string(),
+                    };
+                }
             }
         }
     };
@@ -232,10 +255,6 @@ async fn run_test(
         .await;
 
     TestOutcome::Success {
-        new_fingerprint: if accepted_new {
-            fingerprint
-        } else {
-            None
-        },
+        new_fingerprint: if accepted_new { fingerprint } else { None },
     }
 }

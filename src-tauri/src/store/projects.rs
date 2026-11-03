@@ -8,8 +8,8 @@
 //! branch management.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
@@ -18,7 +18,7 @@ use super::{Store, StoreError};
 
 mod clone;
 
-pub use clone::{clone_and_register, clone_repo, expand_workspace_root, CloneProgress, CloneStage};
+pub use clone::{CloneProgress, CloneStage, clone_and_register, clone_repo, expand_workspace_root};
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -203,11 +203,9 @@ pub fn list(store: &Store) -> Result<Vec<Project>, ProjectError> {
 fn name_exists(store: &Store, name: &str) -> Result<Option<String>, ProjectError> {
     let existing = store.with(|conn| {
         Ok(conn
-            .query_row(
-                "SELECT name FROM projects WHERE name = ?1",
-                [name],
-                |r| r.get::<_, String>(0),
-            )
+            .query_row("SELECT name FROM projects WHERE name = ?1", [name], |r| {
+                r.get::<_, String>(0)
+            })
             .optional()?)
     })?;
     Ok(existing)
@@ -271,11 +269,9 @@ pub fn validate_new_git(store: &Store, name: &str, url: &str) -> Result<(), Proj
     if store
         .with(|conn| {
             Ok(conn
-                .query_row(
-                    "SELECT name FROM projects WHERE url = ?1",
-                    [url],
-                    |r| r.get::<_, String>(0),
-                )
+                .query_row("SELECT name FROM projects WHERE url = ?1", [url], |r| {
+                    r.get::<_, String>(0)
+                })
                 .optional()?)
         })?
         .is_some()
@@ -313,7 +309,9 @@ pub fn import(
         .canonicalize()
         .map_err(|_| ProjectError::PathNotFound(path.to_string_lossy().into_owned()))?;
     if !path.is_dir() {
-        return Err(ProjectError::PathNotFound(path.to_string_lossy().into_owned()));
+        return Err(ProjectError::PathNotFound(
+            path.to_string_lossy().into_owned(),
+        ));
     }
     if name_exists(store, name)?.is_some() {
         return Err(ProjectError::DuplicateName(name.to_string()));

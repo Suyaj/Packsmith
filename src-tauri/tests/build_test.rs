@@ -12,10 +12,10 @@
 use std::path::Path;
 use std::sync::atomic::Ordering;
 
-use packsmith_lib::store::projects::{
-    self, new_cancel_flag, CloneProgress, CloneStage, ProjectError, ProjectType,
-};
 use packsmith_lib::store::Store;
+use packsmith_lib::store::projects::{
+    self, CloneProgress, CloneStage, ProjectError, ProjectType, new_cancel_flag,
+};
 
 const TEST_KEY_HEX: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
 
@@ -61,8 +61,14 @@ fn fixture_repo(dir: &Path, name: &str) -> std::path::PathBuf {
     .unwrap();
 
     // A tag: must NOT appear in the branch list.
-    repo.tag("v1.0", &repo.find_object(main_commit, None).unwrap(), &sig, "tag", false)
-        .unwrap();
+    repo.tag(
+        "v1.0",
+        &repo.find_object(main_commit, None).unwrap(),
+        &sig,
+        "tag",
+        false,
+    )
+    .unwrap();
 
     repo_path
 }
@@ -91,9 +97,11 @@ fn list_branches_sees_branches_added_after_the_fixture_was_created() {
     // 分支列表为实时拉取：远程新建分支必须可见。
     let dir = tempfile::tempdir().unwrap();
     let fixture = fixture_repo(dir.path(), "upstream");
-    assert!(packsmith_lib::build::list_branches(fixture.to_str().unwrap())
-        .unwrap()
-        .is_sorted());
+    assert!(
+        packsmith_lib::build::list_branches(fixture.to_str().unwrap())
+            .unwrap()
+            .is_sorted()
+    );
 
     let repo = git2::Repository::open(&fixture).unwrap();
     let head = repo
@@ -271,8 +279,7 @@ fn prepare_workspace_uses_the_local_path_for_imported_projects() {
     let fixture = fixture_repo(dir.path(), "existing-repo");
     let temp_root = dir.path().join("tmproot");
     let store = open_store(dir.path());
-    let project =
-        projects::import(&store, "existing-repo", &fixture, ProjectType::Maven).unwrap();
+    let project = projects::import(&store, "existing-repo", &fixture, ProjectType::Maven).unwrap();
 
     let ws = packsmith_lib::build::prepare_workspace_in(
         &store,

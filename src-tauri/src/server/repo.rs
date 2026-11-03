@@ -4,7 +4,7 @@
 //! further out. Credentials live as ordinary columns — the SQLCipher layer
 //! (ADR-0002) is what makes them unreadable outside the app.
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::store::Store;
 
@@ -102,8 +102,7 @@ const SELECT_COLUMNS: &str =
 fn raw_to_server(
     (id, host, port, username, method, password, key_path, key_passphrase): RawRow,
 ) -> Result<Server, RepoError> {
-    let credential =
-        Credential::from_row(&method, password, key_path, key_passphrase)?;
+    let credential = Credential::from_row(&method, password, key_path, key_passphrase)?;
     Ok(Server {
         id,
         host,
@@ -119,19 +118,35 @@ fn insert(conn: &Connection, s: &NewServer) -> rusqlite::Result<i64> {
         "INSERT INTO servers (host, port, username, auth_method, password,
                               private_key_path, private_key_passphrase)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![s.host, s.port as i64, s.username, method, password, key_path, key_passphrase],
+        params![
+            s.host,
+            s.port as i64,
+            s.username,
+            method,
+            password,
+            key_path,
+            key_passphrase
+        ],
     )?;
     Ok(conn.last_insert_rowid())
 }
 
-fn credential_columns(c: &Credential) -> (&'static str, Option<String>, Option<String>, Option<String>) {
+fn credential_columns(
+    c: &Credential,
+) -> (&'static str, Option<String>, Option<String>, Option<String>) {
     match c {
-        Credential::PrivateKey { path, passphrase } => {
-            (Credential::KEY_METHOD, None, Some(path.clone()), passphrase.clone())
-        }
-        Credential::Password { password } => {
-            (Credential::PASSWORD_METHOD, Some(password.clone()), None, None)
-        }
+        Credential::PrivateKey { path, passphrase } => (
+            Credential::KEY_METHOD,
+            None,
+            Some(path.clone()),
+            passphrase.clone(),
+        ),
+        Credential::Password { password } => (
+            Credential::PASSWORD_METHOD,
+            Some(password.clone()),
+            None,
+            None,
+        ),
     }
 }
 
@@ -148,26 +163,27 @@ type RawRow = (
 
 /// All servers, oldest first.
 pub fn list(store: &Store) -> Result<Vec<Server>, RepoError> {
-    Ok(store.with(|conn| {
-        let mut stmt =
-            conn.prepare(&format!("SELECT {SELECT_COLUMNS} FROM servers ORDER BY id"))?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-                row.get(5)?,
-                row.get(6)?,
-                row.get(7)?,
-            ))
-        })?;
-        rows.collect::<rusqlite::Result<Vec<RawRow>>>()
-    })?
-    .into_iter()
-    .map(raw_to_server)
-    .collect::<Result<Vec<_>, _>>()?)
+    Ok(store
+        .with(|conn| {
+            let mut stmt =
+                conn.prepare(&format!("SELECT {SELECT_COLUMNS} FROM servers ORDER BY id"))?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                ))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<RawRow>>>()
+        })?
+        .into_iter()
+        .map(raw_to_server)
+        .collect::<Result<Vec<_>, _>>()?)
 }
 
 /// Inserts a server and returns the persisted record (with its id).
@@ -211,8 +227,8 @@ pub fn update(store: &Store, server: &Server) -> Result<Server, RepoError> {
 
 /// Deletes a server. Returns whether a row was actually removed.
 pub fn delete(store: &Store, id: i64) -> Result<bool, RepoError> {
-    let changed = store
-        .with(|conn| conn.execute("DELETE FROM servers WHERE id = ?1", params![id]))?;
+    let changed =
+        store.with(|conn| conn.execute("DELETE FROM servers WHERE id = ?1", params![id]))?;
     Ok(changed > 0)
 }
 

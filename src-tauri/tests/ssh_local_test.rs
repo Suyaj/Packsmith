@@ -10,7 +10,9 @@
 //! `sshd_integration_test.rs` and never run unless explicitly requested.
 
 use packsmith_lib::server::repo::Credential;
-use packsmith_lib::server::ssh::{check_host_key, test_connection, HostKeyCheck, TestOutcome, TestRequest};
+use packsmith_lib::server::ssh::{
+    HostKeyCheck, TestOutcome, TestRequest, check_host_key, test_connection,
+};
 
 const FINGERPRINT_A: &str = "SHA256:AAAA1111aaaaBBBBccccDDDDeeeeFFFF00001111";
 const FINGERPRINT_B: &str = "SHA256:BBBB2222bbbbCCCCddddEEEEffff000011112222";
@@ -73,10 +75,7 @@ fn a_server_that_speaks_non_ssh_garbage_is_unreachable() {
         // Accept one connection and answer with an HTTP status line — a real
         // port that is simply not running SSH.
         let (stream, _) = listener.accept().unwrap();
-        let _ = std::io::Write::write_all(
-            &mut &stream,
-            b"HTTP/1.1 400 Bad Request\r\n\r\n",
-        );
+        let _ = std::io::Write::write_all(&mut &stream, b"HTTP/1.1 400 Bad Request\r\n\r\n");
     });
 
     let outcome = tokio_test_block_on(test_connection(
@@ -120,11 +119,15 @@ fn a_wrong_passphrase_is_key_unreadable_not_auth_failed() {
     let key_path = dir.path().join("encrypted_key");
     let status = std::process::Command::new("ssh-keygen")
         .args([
-            "-t", "ed25519",
-            "-N", "right-passphrase",
-            "-f", key_path.to_str().unwrap(),
+            "-t",
+            "ed25519",
+            "-N",
+            "right-passphrase",
+            "-f",
+            key_path.to_str().unwrap(),
             "-q",
-            "-C", "packsmith-test",
+            "-C",
+            "packsmith-test",
         ])
         .status()
         .expect("ssh-keygen must be available on dev machines");

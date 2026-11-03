@@ -17,7 +17,7 @@ use git2::build::RepoBuilder;
 use git2::{FetchOptions, RemoteCallbacks};
 use serde::{Deserialize, Serialize};
 
-use super::{validate_new_git, CancelFlag, ProjectError, ProjectType, Store};
+use super::{CancelFlag, ProjectError, ProjectType, Store, validate_new_git};
 // ---------------------------------------------------------------------------
 // Progress
 // ---------------------------------------------------------------------------

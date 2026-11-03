@@ -12,6 +12,8 @@ export type Target = {
   uploadDir: string;
   startCommands: string;
   stopCommands: string;
+  /** 构建成功后自动连锁部署（ticket 10，默认关）。 */
+  autoDeploy: boolean;
 };
 
 export type TargetInput = {
@@ -19,6 +21,7 @@ export type TargetInput = {
   uploadDir: string;
   startCommands: string;
   stopCommands: string;
+  autoDeploy?: boolean;
 };
 
 export function listDeploymentTargets(projectId: number): Promise<Target[]> {
@@ -48,6 +51,7 @@ export function updateDeploymentTarget(
     uploadDir: input.uploadDir,
     startCommands: input.startCommands,
     stopCommands: input.stopCommands,
+    autoDeploy: input.autoDeploy ?? false,
   });
 }
 

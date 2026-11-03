@@ -5,7 +5,7 @@
 //! each line trimmed, blank lines dropped, order preserved (see
 //! [`split_commands`]).
 
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{OptionalExtension, params};
 
 use crate::store::Store;
 
@@ -28,6 +28,9 @@ pub struct Target {
     pub upload_dir: String,
     pub start_commands: String,
     pub stop_commands: String,
+    /// 构建成功后自动连锁部署 (auto-chain deploy after a successful build) —
+    /// default OFF (spec: 默认关).
+    pub auto_deploy: bool,
 }
 
 /// Splits a 命令组 (command group) into its commands: one per line, each
@@ -46,7 +49,7 @@ pub fn normalize_commands(text: &str) -> String {
 }
 
 const SELECT_COLUMNS: &str =
-    "id, project_id, server_id, upload_dir, start_commands, stop_commands";
+    "id, project_id, server_id, upload_dir, start_commands, stop_commands, auto_deploy";
 
 fn row_to_target(row: &rusqlite::Row<'_>) -> rusqlite::Result<Target> {
     Ok(Target {
@@ -56,22 +59,22 @@ fn row_to_target(row: &rusqlite::Row<'_>) -> rusqlite::Result<Target> {
         upload_dir: row.get("upload_dir")?,
         start_commands: row.get("start_commands")?,
         stop_commands: row.get("stop_commands")?,
+        auto_deploy: row.get::<_, i64>("auto_deploy")? != 0,
     })
 }
 
 /// Lists every deployment target bound to `project_id`, oldest first.
 pub fn list_for_project(store: &Store, project_id: i64) -> Result<Vec<Target>, RepoError> {
-    Ok(store
-        .with(|conn| {
-            let mut stmt = conn.prepare(&format!(
-                "SELECT {SELECT_COLUMNS} FROM deployment_targets
+    Ok(store.with(|conn| {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {SELECT_COLUMNS} FROM deployment_targets
                  WHERE project_id = ?1 ORDER BY id"
-            ))?;
-            let rows = stmt
-                .query_map([project_id], row_to_target)?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(rows)
-        })?)
+        ))?;
+        let rows = stmt
+            .query_map([project_id], row_to_target)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    })?)
 }
 
 /// Inserts a deployment target and returns the persisted record.
@@ -91,12 +94,13 @@ pub fn create(store: &Store, target: &NewTarget) -> Result<Target, RepoError> {
         upload_dir: target.upload_dir.trim().to_string(),
         start_commands: normalize_commands(&target.start_commands),
         stop_commands: normalize_commands(&target.stop_commands),
+        auto_deploy: false,
     };
     let id = store.with(|conn| {
         conn.execute(
             "INSERT INTO deployment_targets
-                 (project_id, server_id, upload_dir, start_commands, stop_commands)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+                 (project_id, server_id, upload_dir, start_commands, stop_commands, auto_deploy)
+             VALUES (?1, ?2, ?3, ?4, ?5, 0)",
             params![
                 normalized.project_id,
                 normalized.server_id,
@@ -129,14 +133,15 @@ pub fn update(store: &Store, target: &Target) -> Result<Target, RepoError> {
         conn.execute(
             "UPDATE deployment_targets
              SET project_id = ?1, server_id = ?2, upload_dir = ?3,
-                 start_commands = ?4, stop_commands = ?5
-             WHERE id = ?6",
+                 start_commands = ?4, stop_commands = ?5, auto_deploy = ?6
+             WHERE id = ?7",
             params![
                 normalized.project_id,
                 normalized.server_id,
                 normalized.upload_dir,
                 normalized.start_commands,
                 normalized.stop_commands,
+                normalized.auto_deploy as i64,
                 normalized.id
             ],
         )
@@ -149,10 +154,48 @@ pub fn update(store: &Store, target: &Target) -> Result<Target, RepoError> {
 
 /// Deletes a deployment target. Returns whether a row was actually removed.
 pub fn delete(store: &Store, id: i64) -> Result<bool, RepoError> {
+    let changed = store
+        .with(|conn| conn.execute("DELETE FROM deployment_targets WHERE id = ?1", params![id]))?;
+    Ok(changed > 0)
+}
+
+/// Fetches one deployment target by id, any project.
+pub fn get(store: &Store, id: i64) -> Result<Option<Target>, RepoError> {
+    Ok(store.with(|conn| {
+        conn.query_row(
+            &format!("SELECT {SELECT_COLUMNS} FROM deployment_targets WHERE id = ?1"),
+            [id],
+            row_to_target,
+        )
+        .optional()
+    })?)
+}
+
+/// Toggles 构建成功后自动连锁部署 for one target (ticket 10). Returns
+/// whether the target existed.
+pub fn set_auto_deploy(store: &Store, id: i64, enabled: bool) -> Result<bool, RepoError> {
     let changed = store.with(|conn| {
-        conn.execute("DELETE FROM deployment_targets WHERE id = ?1", params![id])
+        conn.execute(
+            "UPDATE deployment_targets SET auto_deploy = ?1 WHERE id = ?2",
+            params![enabled as i64, id],
+        )
     })?;
     Ok(changed > 0)
+}
+
+/// Ids of the project's deployment targets with auto-chain enabled (构建
+/// 成功后自动连锁部署), oldest first.
+pub fn auto_deploy_enabled(store: &Store, project_id: i64) -> Result<Vec<i64>, RepoError> {
+    Ok(store.with(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT id FROM deployment_targets
+             WHERE project_id = ?1 AND auto_deploy != 0 ORDER BY id",
+        )?;
+        let rows = stmt
+            .query_map([project_id], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    })?)
 }
 
 #[derive(Debug)]
@@ -220,14 +263,14 @@ fn binding_exists(
 fn check_references(store: &Store, project_id: i64, server_id: i64) -> Result<(), RepoError> {
     let (project_exists, server_exists) = store.with(|conn| {
         let project = conn
-            .query_row(
-                "SELECT 1 FROM projects WHERE id = ?1",
-                [project_id],
-                |_| Ok(()),
-            )
+            .query_row("SELECT 1 FROM projects WHERE id = ?1", [project_id], |_| {
+                Ok(())
+            })
             .optional()?;
         let server = conn
-            .query_row("SELECT 1 FROM servers WHERE id = ?1", [server_id], |_| Ok(()))
+            .query_row("SELECT 1 FROM servers WHERE id = ?1", [server_id], |_| {
+                Ok(())
+            })
             .optional()?;
         Ok((project.is_some(), server.is_some()))
     })?;

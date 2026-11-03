@@ -5,15 +5,15 @@
 //! (`key` module). This module is the shared data-access and migration entry
 //! point for all later tickets.
 
-/// Encryption key lifecycle: generation + OS-keychain storage.
-pub mod key;
-/// 项目 (Project) records: persistence, validation, clone + import flows.
-pub mod projects;
 /// 构建历史 (Build History): per-build records, artifact listing, retention.
 pub mod history;
+/// Encryption key lifecycle: generation + OS-keychain storage.
+pub mod key;
+mod migrations;
+/// 项目 (Project) records: persistence, validation, clone + import flows.
+pub mod projects;
 /// 应用设置（app_meta key/value 层，ticket 08）。
 pub mod settings;
-mod migrations;
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};

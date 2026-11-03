@@ -10,7 +10,7 @@
 //! in `src/settings.rs`.
 
 use packsmith_lib::settings::{
-    get_close_window_behavior, set_close_window_behavior, CloseWindowBehavior,
+    CloseWindowBehavior, get_close_window_behavior, set_close_window_behavior,
 };
 use packsmith_lib::store::Store;
 
@@ -40,7 +40,10 @@ fn close_window_behavior_round_trips() {
     let store = open(&dir.path().join("test.db"));
 
     set_close_window_behavior(&store, CloseWindowBehavior::Quit).unwrap();
-    assert_eq!(get_close_window_behavior(&store).unwrap(), CloseWindowBehavior::Quit);
+    assert_eq!(
+        get_close_window_behavior(&store).unwrap(),
+        CloseWindowBehavior::Quit
+    );
 
     set_close_window_behavior(&store, CloseWindowBehavior::Minimize).unwrap();
     assert_eq!(
@@ -110,7 +113,10 @@ fn migration_seeds_the_default_setting_row() {
             )
         })
         .unwrap();
-    assert_eq!(raw, "minimize", "migration must seed the documented default");
+    assert_eq!(
+        raw, "minimize",
+        "migration must seed the documented default"
+    );
 }
 
 #[test]
@@ -130,7 +136,7 @@ fn parse_accepts_only_documented_values() {
 
 #[test]
 fn close_action_follows_the_setting() {
-    use packsmith_lib::settings::{close_action, CloseAction};
+    use packsmith_lib::settings::{CloseAction, close_action};
 
     assert_eq!(
         close_action(CloseWindowBehavior::Minimize),

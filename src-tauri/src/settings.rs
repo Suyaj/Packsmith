@@ -66,9 +66,7 @@ pub fn close_action(behavior: CloseWindowBehavior) -> CloseAction {
 
 /// 读取关闭窗口行为设置。缺行或值无法识别时回落到默认（最小化到托盘）——
 /// 设置页永远能打开，行为永远有定义。
-pub fn get_close_window_behavior(
-    store: &Store,
-) -> Result<CloseWindowBehavior, StoreError> {
+pub fn get_close_window_behavior(store: &Store) -> Result<CloseWindowBehavior, StoreError> {
     let raw: Option<String> = store.with(|conn| {
         conn.query_row(
             "SELECT value FROM app_meta WHERE key = ?1",

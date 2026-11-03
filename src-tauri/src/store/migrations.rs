@@ -99,6 +99,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         name: "ticket 11: 关窗行为设置默认值 (close_window_behavior)",
         sql: "INSERT OR IGNORE INTO app_meta (key, value) VALUES ('close_window_behavior', 'minimize');",
     },
+    Migration {
+        version: 9,
+        name: "ticket 10: deployment_targets.auto_deploy (构建成功后自动连锁部署, 默认关)",
+        sql: "ALTER TABLE deployment_targets ADD COLUMN auto_deploy INTEGER NOT NULL DEFAULT 0;",
+    },
 ];
 
 pub(crate) const LATEST_SCHEMA_VERSION: i32 = MIGRATIONS[MIGRATIONS.len() - 1].version;

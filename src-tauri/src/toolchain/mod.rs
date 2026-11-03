@@ -21,7 +21,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
 pub use catalog::ToolKind;
-pub use status::{find_executable, ToolState};
+pub use status::{ToolState, find_executable};
 
 use install::ProgressEvent;
 

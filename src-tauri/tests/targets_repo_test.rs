@@ -13,8 +13,7 @@
 use packsmith_lib::store::Store;
 use packsmith_lib::targets::repo::{self, NewTarget, Target};
 
-const TEST_KEY_HEX: &str =
-    "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
+const TEST_KEY_HEX: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
 
 fn open_store() -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
@@ -45,7 +44,11 @@ fn seed_project(store: &Store, name: &str) -> i64 {
             conn.execute(
                 "INSERT INTO projects (name, source, url, path, project_type)
                  VALUES (?1, 'git', ?2, ?3, 'maven')",
-                rusqlite::params![name, format!("https://example.com/{name}.git"), format!("/tmp/{name}")],
+                rusqlite::params![
+                    name,
+                    format!("https://example.com/{name}.git"),
+                    format!("/tmp/{name}")
+                ],
             )?;
             Ok(conn.last_insert_rowid())
         })
@@ -76,7 +79,10 @@ fn migration_creates_deployment_targets_table() {
             )
         })
         .unwrap();
-    assert_eq!(count, 1, "migration must create the deployment_targets table");
+    assert_eq!(
+        count, 1,
+        "migration must create the deployment_targets table"
+    );
 }
 
 #[test]
@@ -99,6 +105,7 @@ fn created_target_round_trips_all_fields() {
             upload_dir: "/home/app".to_string(),
             start_commands: "cd /home/app\nsh start.sh start".to_string(),
             stop_commands: "sh start.sh stop".to_string(),
+            auto_deploy: false,
         }
     );
 }
@@ -159,7 +166,11 @@ fn one_project_can_bind_multiple_servers_and_a_server_multiple_projects() {
     assert_eq!(a_server_ids, vec![server_1, server_2], "oldest first");
 
     let for_b = repo::list_for_project(&store, project_b).unwrap();
-    assert_eq!(for_b.len(), 1, "one server may be bound by several projects");
+    assert_eq!(
+        for_b.len(),
+        1,
+        "one server may be bound by several projects"
+    );
     assert_eq!(for_b[0].server_id, server_1);
 }
 
@@ -180,6 +191,7 @@ fn update_replaces_fields_and_keeps_id() {
             upload_dir: "/srv/app2".to_string(),
             start_commands: "sh run.sh".to_string(),
             stop_commands: "".to_string(),
+            auto_deploy: false,
         },
     )
     .unwrap();
@@ -204,6 +216,7 @@ fn update_unknown_id_fails() {
             upload_dir: "/x".to_string(),
             start_commands: String::new(),
             stop_commands: String::new(),
+            auto_deploy: false,
         },
     );
     assert!(result.is_err());
@@ -301,4 +314,87 @@ fn targets_survive_an_app_restart() {
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].id, created.id);
     assert_eq!(listed[0].start_commands, "cd /home/app\nsh start.sh start");
+}
+
+// ---------------------------------------------------------------------------
+// 构建成功后自动连锁部署 (auto-deploy toggle, ticket 10)
+// ---------------------------------------------------------------------------
+
+/// The auto-chain toggle defaults to OFF (spec: 默认关).
+#[test]
+fn auto_deploy_defaults_to_off() {
+    let (_dir, store) = open_store();
+    let project = seed_project(&store, "app");
+    let server = seed_server(&store, "web-1");
+    let target = repo::create(&store, &new_target(project, server)).unwrap();
+    assert!(!target.auto_deploy);
+    assert!(!repo::list_for_project(&store, project).unwrap()[0].auto_deploy);
+}
+
+#[test]
+fn auto_deploy_can_be_toggled_on_and_off() {
+    let (_dir, store) = open_store();
+    let project = seed_project(&store, "app");
+    let server = seed_server(&store, "web-1");
+    let target = repo::create(&store, &new_target(project, server)).unwrap();
+
+    assert!(repo::set_auto_deploy(&store, target.id, true).unwrap());
+    let listed = repo::list_for_project(&store, project).unwrap();
+    assert!(listed[0].auto_deploy);
+
+    assert!(repo::set_auto_deploy(&store, target.id, false).unwrap());
+    assert!(!repo::list_for_project(&store, project).unwrap()[0].auto_deploy);
+}
+
+/// Only targets with the toggle ON are picked up for auto-chain deployment.
+#[test]
+fn auto_deploy_enabled_targets_lists_only_toggled_targets_of_the_project() {
+    let (_dir, store) = open_store();
+    let project_a = seed_project(&store, "app-a");
+    let project_b = seed_project(&store, "app-b");
+    let s1 = seed_server(&store, "web-1");
+    let s2 = seed_server(&store, "web-2");
+    let a1 = repo::create(&store, &new_target(project_a, s1)).unwrap();
+    let _a2 = repo::create(&store, &new_target(project_a, s2)).unwrap();
+    let b1 = repo::create(&store, &new_target(project_b, s1)).unwrap();
+
+    repo::set_auto_deploy(&store, a1.id, true).unwrap();
+    repo::set_auto_deploy(&store, b1.id, true).unwrap();
+
+    let enabled = repo::auto_deploy_enabled(&store, project_a).unwrap();
+    assert_eq!(enabled, vec![a1.id]);
+}
+
+#[test]
+fn set_auto_deploy_reports_missing_target() {
+    let (_dir, store) = open_store();
+    assert!(!repo::set_auto_deploy(&store, 999, true).unwrap());
+}
+
+/// update() replaces all fields and must preserve the toggle round-trip.
+#[test]
+fn update_preserves_and_sets_auto_deploy() {
+    let (_dir, store) = open_store();
+    let project = seed_project(&store, "app");
+    let server = seed_server(&store, "web-1");
+    let target = repo::create(&store, &new_target(project, server)).unwrap();
+
+    let mut updated = target.clone();
+    updated.auto_deploy = true;
+    let updated = repo::update(&store, &updated).unwrap();
+    assert!(updated.auto_deploy);
+    assert!(repo::list_for_project(&store, project).unwrap()[0].auto_deploy);
+}
+
+#[test]
+fn get_returns_one_target_by_id_across_projects() {
+    let (_dir, store) = open_store();
+    let project_a = seed_project(&store, "app-a");
+    let server = seed_server(&store, "web-1");
+    let created = repo::create(&store, &new_target(project_a, server)).unwrap();
+    let fetched = repo::get(&store, created.id)
+        .unwrap()
+        .expect("target exists");
+    assert_eq!(fetched.project_id, project_a);
+    assert!(repo::get(&store, 999).unwrap().is_none());
 }

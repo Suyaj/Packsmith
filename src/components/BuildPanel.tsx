@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Channel } from "@tauri-apps/api/core";
 import { Button } from "@/components/ui/button";
+import DeployDialog from "@/components/DeployDialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   cancelBuildWorkspace,
@@ -47,6 +48,7 @@ function BuildPanel({ project, onClose }: { project: Project; onClose: () => voi
   const [commandSaved, setCommandSaved] = useState(false);
   const [selectedArtifact, setSelectedArtifact] = useState<string | null>(null);
   const [defaultArtifactSaved, setDefaultArtifactSaved] = useState(false);
+  const [deploying, setDeploying] = useState(false);
 
   // 打开面板即实时拉取分支列表（远程新建分支可见）。
   useEffect(() => {
@@ -319,10 +321,19 @@ function BuildPanel({ project, onClose }: { project: Project; onClose: () => voi
           )}
 
           {outcome && !busy && (
-            <div>
+            <div className="flex gap-2">
               <Button variant="outline" size="sm" onClick={handleViewLog}>
                 {t("projects.build.viewLog")}
               </Button>
+              {outcome.success && outcome.history_id !== null && (
+                <Button
+                  size="sm"
+                  data-testid="build-deploy"
+                  onClick={() => setDeploying(true)}
+                >
+                  {t("deploy.submit")}
+                </Button>
+              )}
             </div>
           )}
 
@@ -340,6 +351,17 @@ function BuildPanel({ project, onClose }: { project: Project; onClose: () => voi
               {busy ? t("projects.build.cancelWork") : t("projects.build.close")}
             </Button>
           </div>
+
+          {deploying && outcome && outcome.history_id !== null && (
+            <DeployDialog
+              projectId={project.id}
+              projectName={project.name}
+              historyId={outcome.history_id}
+              open
+              onClose={() => setDeploying(false)}
+              defaultArtifact={project.default_artifact ?? null}
+            />
+          )}
         </div>
       </CardContent>
     </Card>

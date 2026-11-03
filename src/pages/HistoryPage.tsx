@@ -17,6 +17,7 @@ import {
   type HistoryEntry,
 } from "@/lib/historyApi";
 import { listProjects, readBuildLog, type Project } from "@/lib/buildApi";
+import DeployDialog from "@/components/DeployDialog";
 
 type BackendError = { code: string; message: string };
 
@@ -49,6 +50,7 @@ function HistoryPage() {
   const [logText, setLogText] = useState<string | null>(null);
   const [openArtifactsId, setOpenArtifactsId] = useState<number | null>(null);
   const [artifacts, setArtifacts] = useState<ArtifactFile[]>([]);
+  const [deployEntry, setDeployEntry] = useState<HistoryEntry | null>(null);
 
   const load = useCallback(
     async (projectId: string) => {
@@ -200,6 +202,15 @@ function HistoryPage() {
                           {t("history.artifacts")}
                         </Button>
                       )}
+                      {entry.success && entry.artifacts_dir !== null && (
+                        <Button
+                          size="sm"
+                          data-testid={`deploy-history-${entry.id}`}
+                          onClick={() => setDeployEntry(entry)}
+                        >
+                          {t("history.deploy")}
+                        </Button>
+                      )}
                       <Button variant="outline" size="sm" onClick={() => handleDelete(entry)}>
                         {t("history.delete")}
                       </Button>
@@ -234,6 +245,16 @@ function HistoryPage() {
             </ul>
           </CardContent>
         </Card>
+      )}
+
+      {deployEntry && (
+        <DeployDialog
+          projectId={deployEntry.project_id}
+          projectName={deployEntry.project_name}
+          historyId={deployEntry.id}
+          open
+          onClose={() => setDeployEntry(null)}
+        />
       )}
     </section>
   );

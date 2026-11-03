@@ -47,13 +47,7 @@ pub fn show_main_window(app: &AppHandle) {
 pub fn refresh_build_state(app: &AppHandle) {
     let running = app
         .try_state::<BuildRegistry>()
-        .map(|registry| {
-            registry
-                .0
-                .lock()
-                .expect("build registry poisoned")
-                .len()
-        })
+        .map(|registry| registry.0.lock().expect("build registry poisoned").len())
         .unwrap_or(0);
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         let _ = tray.set_tooltip(Some(tooltip_text(running > 0).to_string()));
@@ -68,7 +62,11 @@ pub fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let menu = Menu::with_items(app, &[&open, &quit])?;
 
     TrayIconBuilder::with_id(TRAY_ID)
-        .icon(app.default_window_icon().expect("app icon is bundled").clone())
+        .icon(
+            app.default_window_icon()
+                .expect("app icon is bundled")
+                .clone(),
+        )
         .tooltip(tooltip_text(false))
         .menu(&menu)
         .show_menu_on_left_click(false)
