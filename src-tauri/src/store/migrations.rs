@@ -73,6 +73,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         name: "ticket 06: projects.last_branch (记住上次打包分支)",
         sql: "ALTER TABLE projects ADD COLUMN last_branch TEXT;",
     },
+    Migration {
+        version: 6,
+        name: "ticket 07: projects.build_command (随项目可编辑的构建命令)",
+        sql: "ALTER TABLE projects ADD COLUMN build_command TEXT NOT NULL DEFAULT 'mvnd package -DskipTests';",
+    },
 ];
 
 pub(crate) const LATEST_SCHEMA_VERSION: i32 = MIGRATIONS[MIGRATIONS.len() - 1].version;
