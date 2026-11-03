@@ -103,6 +103,31 @@
   },
   "settings": {
     "title": "设置",
-    "empty": "设置项即将可用"
+    "empty": "设置项即将可用",
+    "toolchain": {
+      "title": "托管工具链",
+      "description": "Packsmith 执行只使用托管工具链；系统 PATH 上的同名工具仅用于检测展示，不作为执行来源。",
+      "loading": "正在检测本机工具…",
+      "loadError": "检测失败：{{error}}",
+      "notOnPath": "未在本机检测到",
+      "managedVersion": "托管版本 {{version}}",
+      "download": "下载托管",
+      "retry": "重试",
+      "state": {
+        "managed": "已托管",
+        "detected": "已检测",
+        "missing": "缺失"
+      },
+      "phase": {
+        "downloading": "下载中",
+        "extracting": "解压中",
+        "installing": "安装中"
+      },
+      "tools": {
+        "git": "Git",
+        "jdk": "JDK（默认 1.8）",
+        "mvnd": "mvnd"
+      }
+    }
   }
 }
