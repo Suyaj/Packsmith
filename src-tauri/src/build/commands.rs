@@ -102,7 +102,8 @@ pub async fn start_build_workspace(
     result.map_err(Into::into)
 }
 
-/// 取消进行中的打包准备（按项目 id）。临时工作区由任务侧清理。
+/// 取消进行中的打包任务（按项目 id）：置位取消标志。克隆阶段随之中断；
+/// 构建阶段轮询到标志即杀死子进程。临时工作区由任务侧清理。
 #[tauri::command]
 pub fn cancel_build_workspace(registry: State<'_, BuildRegistry>, project_id: i64) {
     if let Some(flag) = registry
