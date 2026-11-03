@@ -27,7 +27,21 @@ fn open_store(dir: &Path) -> Store {
 fn fixture_project(dir: &Path, store: &Store, name: &str) -> PathBuf {
     let repo_path = dir.join(name);
     let repo = git2::Repository::init(&repo_path).unwrap();
-    std::fs::write(repo_path.join("pom.xml"), "<project/>\n").unwrap();
+    std::fs::write(
+        repo_path.join("pom.xml"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>com.packsmith.test</groupId>
+    <artifactId>demo</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+</project>
+"#,
+    )
+    .unwrap();
     let mut index = repo.index().unwrap();
     index.add_path(Path::new("pom.xml")).unwrap();
     index.write().unwrap();
@@ -383,7 +397,12 @@ async fn 真实托管mvnd构建最小maven项目_依赖落在独立仓库() {
     .await
     .expect("real mvnd build must succeed");
 
-    assert!(outcome.success, "exit code {:?}", outcome.exit_code);
+    assert!(
+        outcome.success,
+        "exit code {:?}\nlog:\n{}",
+        outcome.exit_code,
+        std::fs::read_to_string(&outcome.log_path).unwrap_or_default()
+    );
     assert!(workspaces_in(&temp_root).is_empty());
     // 依赖确实下载进了独立仓库（ADR-0001），而非 ~/.m2。
     let m2 = appdata.join("m2-repo");
