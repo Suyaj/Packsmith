@@ -2,6 +2,7 @@ mod toolchain;
 
 use tauri::Manager;
 
+pub mod build;
 pub mod commands;
 pub mod server;
 pub mod store;
@@ -13,6 +14,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(toolchain::DownloadGuard::default())
         .manage(commands::CloneRegistry::default())
+        .manage(build::commands::BuildRegistry::default())
         .invoke_handler(tauri::generate_handler![
             toolchain::toolchain_status,
             toolchain::toolchain_download,
@@ -20,6 +22,9 @@ pub fn run() {
             commands::clone_project,
             commands::import_project,
             commands::cancel_clone,
+            build::commands::list_remote_branches,
+            build::commands::start_build_workspace,
+            build::commands::cancel_build_workspace,
             server::commands::list_servers,
             server::commands::create_server,
             server::commands::update_server,

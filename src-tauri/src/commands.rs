@@ -44,7 +44,7 @@ impl From<ProjectError> for ApiError {
 }
 
 impl ApiError {
-    fn raw(code: &str, message: impl Into<String>) -> Self {
+    pub(crate) fn raw(code: &str, message: impl Into<String>) -> Self {
         ApiError {
             code: code.to_string(),
             message: message.into(),

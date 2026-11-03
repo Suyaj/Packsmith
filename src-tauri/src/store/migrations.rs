@@ -68,6 +68,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
             UNIQUE (project_id, server_id)
         );",
     },
+    Migration {
+        version: 5,
+        name: "ticket 06: projects.last_branch (记住上次打包分支)",
+        sql: "ALTER TABLE projects ADD COLUMN last_branch TEXT;",
+    },
 ];
 
 pub(crate) const LATEST_SCHEMA_VERSION: i32 = MIGRATIONS[MIGRATIONS.len() - 1].version;

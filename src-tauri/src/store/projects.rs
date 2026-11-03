@@ -78,6 +78,9 @@ pub struct Project {
     /// 项目在磁盘上的目录（clone 目标或导入路径，绝对路径）。
     pub path: String,
     pub project_type: ProjectType,
+    /// 上次打包选择的分支（ticket 06）；从未打包过为 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_branch: Option<String>,
     pub created_at: String,
 }
 
@@ -114,6 +117,12 @@ pub enum ProjectError {
     /// 克隆失败（git2 / URL 无效等）。
     #[error("clone failed: {0}")]
     Clone(String),
+    /// 实时拉取分支列表失败（`git ls-remote` 等价操作；URL 不可达 / 不是 git 仓库等）。
+    #[error("failed to list remote branches: {0}")]
+    BranchListing(String),
+    /// 指定 id 的项目不存在。
+    #[error("project {0} not found")]
+    ProjectNotFound(i64),
     #[error("store error: {0}")]
     Store(#[from] StoreError),
     #[error("io error: {0}")]
@@ -133,6 +142,8 @@ impl ProjectError {
             ProjectError::InvalidType(_) => "invalid_type",
             ProjectError::Cancelled => "cancelled",
             ProjectError::Clone(_) => "clone_failed",
+            ProjectError::BranchListing(_) => "branch_listing_failed",
+            ProjectError::ProjectNotFound(_) => "project_not_found",
             ProjectError::Store(_) => "store",
             ProjectError::Io(_) => "io",
         }
@@ -152,6 +163,7 @@ fn row_to_project(row: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
         path: row.get("path")?,
         project_type: ProjectType::from_str(&row.get::<_, String>("project_type")?)
             .expect("project_type is CHECK-constrained to known values"),
+        last_branch: row.get("last_branch")?,
         created_at: row.get("created_at")?,
     })
 }
@@ -160,7 +172,7 @@ fn row_to_project(row: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
 pub fn list(store: &Store) -> Result<Vec<Project>, ProjectError> {
     let rows = store.with(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT id, name, source, url, path, project_type, created_at
+            "SELECT id, name, source, url, path, project_type, last_branch, created_at
              FROM projects ORDER BY created_at, id",
         )?;
         let rows = stmt
@@ -223,7 +235,7 @@ pub fn get(store: &Store, id: i64) -> Result<Option<Project>, ProjectError> {
     let project = store.with(|conn| {
         Ok(conn
             .query_row(
-                "SELECT id, name, source, url, path, project_type, created_at
+                "SELECT id, name, source, url, path, project_type, last_branch, created_at
                  FROM projects WHERE id = ?1",
                 [id],
                 row_to_project,
@@ -318,12 +330,24 @@ pub fn import(
 
 fn get_in(conn: &rusqlite::Connection, id: i64) -> rusqlite::Result<Option<Project>> {
     conn.query_row(
-        "SELECT id, name, source, url, path, project_type, created_at
+        "SELECT id, name, source, url, path, project_type, last_branch, created_at
          FROM projects WHERE id = ?1",
         [id],
         row_to_project,
     )
     .optional()
+}
+
+/// 记住项目上次打包使用的分支（ticket 06）：下次打开打包面板时默认选中。
+pub fn set_last_branch(store: &Store, project_id: i64, branch: &str) -> Result<(), ProjectError> {
+    store.with(|conn| {
+        conn.execute(
+            "UPDATE projects SET last_branch = ?1 WHERE id = ?2",
+            rusqlite::params![branch, project_id],
+        )?;
+        Ok(())
+    })?;
+    Ok(())
 }
 
 /// 共享的取消标志，供 clone 任务与 `cancel_clone` 命令使用。

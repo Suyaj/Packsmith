@@ -456,6 +456,42 @@ fn clone_validates_name_and_duplicates_before_touching_the_disk() {
 }
 
 // ---------------------------------------------------------------------------
+// Last-used branch persistence (ticket 06: 打包分支选择)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn last_used_branch_is_persisted_and_survives_reopening_the_store() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("test.db");
+
+    {
+        let store = Store::open(&db, TEST_KEY_HEX).unwrap();
+        let p = projects::create_git_record(
+            &store,
+            "demo-app",
+            "https://example.com/demo-app.git",
+            "/tmp/w/demo-app",
+            ProjectType::Maven,
+        )
+        .unwrap();
+        assert_eq!(
+            p.last_branch, None,
+            "a fresh project has no last-used branch"
+        );
+        projects::set_last_branch(&store, p.id, "release/1.0").unwrap();
+    }
+
+    let store = Store::open(&db, TEST_KEY_HEX).unwrap();
+    let all = projects::list(&store).unwrap();
+    assert_eq!(all.len(), 1);
+    assert_eq!(
+        all[0].last_branch.as_deref(),
+        Some("release/1.0"),
+        "the last-used branch must be remembered across restarts"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Workspace root expansion
 // ---------------------------------------------------------------------------
 
