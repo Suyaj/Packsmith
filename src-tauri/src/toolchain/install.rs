@@ -85,6 +85,7 @@ pub async fn install_from(
 
     let exec = find_executable_in(kind, &extracted_to)
         .ok_or_else(|| ToolchainError::Archive("解压后未找到工具可执行文件".to_string()))?;
+    ensure_owner_exec(&exec)?;
     let exec_rel = exec
         .strip_prefix(&extracted_to)
         .unwrap_or(&exec)
@@ -119,6 +120,40 @@ pub async fn install_from(
     let _ = std::fs::remove_file(tools_root.join(".downloads").join(&file_name));
 
     Ok(source.version.to_string())
+}
+
+/// 校验注册的可执行文件有属主执行位；缺失则 chmod 0755 自愈——覆盖无
+/// unix_mode 信息的安装包（Windows 打包常见，曾致 spawn os error 13）。
+/// 自愈失败即安装失败：坏安装不允许流到 spawn 阶段。
+#[cfg(unix)]
+fn ensure_owner_exec(path: &Path) -> Result<(), ToolchainError> {
+    use std::os::unix::fs::PermissionsExt;
+    ensure_owner_exec_with(path, |p, mode| {
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode))
+    })
+}
+
+/// chmod 可注入的变体（单测覆盖自愈失败路径）。
+#[cfg(unix)]
+fn ensure_owner_exec_with(
+    path: &Path,
+    chmod: impl Fn(&Path, u32) -> std::io::Result<()>,
+) -> Result<(), ToolchainError> {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(path)?.permissions().mode();
+    if mode & 0o100 == 0 {
+        chmod(path, 0o755).map_err(|e| ToolchainError::ExecBit {
+            path: path.display().to_string(),
+            detail: e.to_string(),
+        })?;
+    }
+    Ok(())
+}
+
+/// 非 Unix 平台无执行位概念，原样通过。
+#[cfg(not(unix))]
+fn ensure_owner_exec(_path: &Path) -> Result<(), ToolchainError> {
+    Ok(())
 }
 
 /// 解压到 `tools_root/.tmp-<dir>`（与最终目录同盘，保证 rename 原子）。
@@ -197,52 +232,58 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tools_root);
     }
 
-    /// 全链路 smoke（确定性）：起本地 HTTP 服务提供与官方包完全相同
-    /// 布局（顶层目录 + bin/mvnd）的安装包，走 download_to（真实 socket、
-    /// 真实 HTTP）→ 解压 → 登记 → 三态判定。远程下载部分由两个
-    /// 真实网络 smoke 分别覆盖。
-    #[tokio::test]
-    async fn 全链路_本地服务安装mvnd并登记为已托管() {
+    /// 起单连接本地 HTTP 服务返回给定字节（真实 socket），返回 URL。
+    fn serve_once(body: Vec<u8>) -> String {
         use std::io::{Read as _, Write as _};
-
-        // 组装官方布局的安装包字节
-        let dir = temp_root("local-srv");
-        std::fs::create_dir_all(&dir).unwrap();
-        let zip_path = dir.join("mvnd.zip");
-        {
-            let file = std::fs::File::create(&zip_path).unwrap();
-            let mut zip = zip::ZipWriter::new(file);
-            zip.start_file(
-                "maven-mvnd-1.0.6-darwin-aarch64/bin/mvnd",
-                zip::write::SimpleFileOptions::default(),
-            )
-            .unwrap();
-            std::io::Write::write_all(&mut zip, b"#!/bin/sh\necho mvnd").unwrap();
-            zip.finish().unwrap();
-        }
-        let body = std::fs::read(&zip_path).unwrap();
-
-        // 单连接 HTTP 服务
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        let server_body = body.clone();
         std::thread::spawn(move || {
             if let Ok((mut stream, _)) = listener.accept() {
                 let mut buf = [0u8; 4096];
                 let _ = stream.read(&mut buf);
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    server_body.len()
+                    body.len()
                 );
                 let _ = stream.write_all(response.as_bytes());
-                let _ = stream.write_all(&server_body);
+                let _ = stream.write_all(&body);
             }
         });
+        format!("http://127.0.0.1:{port}/package.zip")
+    }
+
+    /// 组装官方布局的安装包字节（顶层目录 + bin/mvnd）。
+    fn build_official_zip(dir: &Path, mode: Option<u32>) -> Vec<u8> {
+        let zip_path = dir.join("mvnd.zip");
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let mut options = zip::write::SimpleFileOptions::default();
+            if let Some(mode) = mode {
+                options = options.unix_permissions(mode);
+            }
+            zip.start_file("maven-mvnd-1.0.6-darwin-aarch64/bin/mvnd", options).unwrap();
+            std::io::Write::write_all(&mut zip, b"#!/bin/sh\necho mvnd").unwrap();
+            zip.finish().unwrap();
+        }
+        std::fs::read(&zip_path).unwrap()
+    }
+
+    /// 全链路 smoke（确定性）：起本地 HTTP 服务提供与官方包完全相同
+    /// 布局（顶层目录 + bin/mvnd）的安装包，走 download_to（真实 socket、
+    /// 真实 HTTP）→ 解压 → 登记 → 三态判定。远程下载部分由两个
+    /// 真实网络 smoke 分别覆盖。
+    #[tokio::test]
+    async fn 全链路_本地服务安装mvnd并登记为已托管() {
+        let dir = temp_root("local-srv");
+        std::fs::create_dir_all(&dir).unwrap();
+        let body = build_official_zip(&dir, None);
+        let url = serve_once(body);
 
         let tools_root = temp_root("local-install");
         std::fs::create_dir_all(&tools_root).unwrap();
         let source = ToolSource {
-            url: format!("http://127.0.0.1:{port}/maven-mvnd-1.0.6-darwin-aarch64.zip"),
+            url,
             format: ArchiveFormat::Zip,
             version: "1.0.6",
             strip_top: true,
@@ -268,6 +309,62 @@ mod tests {
         let state = crate::toolchain::state::ManagedState::load(&tools_root);
         assert_eq!(state.tools.get("mvnd").unwrap().version, "1.0.6");
         let _ = std::fs::remove_dir_all(&tools_root);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 回归：官方包在 Windows 打包时条目无 unix_mode，解压落 0644；
+    /// 安装校验应 chmod 0755 自愈，而非把坏安装流到 spawn 阶段
+    /// （spawn Permission denied, os error 13）。
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn 无模式信息的zip安装自愈出执行位() {
+        let dir = temp_root("modeless-zip");
+        std::fs::create_dir_all(&dir).unwrap();
+        let body = build_official_zip(&dir, None);
+        let url = serve_once(body);
+
+        let tools_root = temp_root("modeless-install");
+        std::fs::create_dir_all(&tools_root).unwrap();
+        let source = ToolSource {
+            url,
+            format: ArchiveFormat::Zip,
+            version: "1.0.6",
+            strip_top: true,
+        };
+
+        install_from(ToolKind::Mvnd, &tools_root, &source, |_| {})
+            .await
+            .expect("modeless 安装应自愈成功");
+
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(tools_root.join("mvnd/bin/mvnd"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o111, 0o111, "自愈后应有执行位，实际 mode={mode:o}");
+        let _ = std::fs::remove_dir_all(&tools_root);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// chmod 失败必须报安装错误（坏安装不允许产生），而非静默通过。
+    #[test]
+    #[cfg(unix)]
+    fn 自愈chmod失败时报安装错误() {
+        let dir = temp_root("exec-bit-fail");
+        std::fs::create_dir_all(&dir).unwrap();
+        let exec = dir.join("mvnd"); // 0644：无属主执行位，才会走到 chmod
+        std::fs::write(&exec, "#!/bin/sh").unwrap();
+
+        let result = ensure_owner_exec_with(&exec, |_p, _m| {
+            Err(std::io::Error::other("注入的 chmod 失败"))
+        });
+        match result {
+            Err(ToolchainError::ExecBit { path, detail }) => {
+                assert_eq!(path, exec.to_string_lossy());
+                assert!(detail.contains("注入的 chmod 失败"));
+            }
+            other => panic!("应为 ExecBit 错误，实际 {other:?}"),
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
