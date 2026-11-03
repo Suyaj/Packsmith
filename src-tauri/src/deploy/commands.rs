@@ -21,6 +21,7 @@ use crate::deploy::engine::{self, ConnInfo, DeployEvent, DeployPlan, TargetJob};
 use crate::deploy::transport::SshTransport;
 use crate::server::repo as server_repo;
 use crate::store::Store;
+use crate::store::deploy_history;
 use crate::store::history;
 use crate::store::projects::{CancelFlag, new_cancel_flag};
 use crate::targets::repo as targets_repo;
@@ -199,6 +200,9 @@ pub async fn start_deploy(
     .await;
 
     registry.unregister(deploy_id);
+    // 部署记录落库（ticket 12）：每个目标一行，供首页"最近部署时间"。
+    // 记录失败不影响部署结果本身。
+    let _ = deploy_history::record_outcomes(&store, &summary);
     Ok(summary)
 }
 
@@ -302,7 +306,9 @@ pub fn auto_chain_after_build(
         let sink = move |event: DeployEvent| {
             let _ = emitter.emit("deploy-event", AutoDeployEvent { deploy_id, event });
         };
-        let _summary = engine::run_deploy(plan, factory, cancel, sink).await;
+        let summary = engine::run_deploy(plan, factory, cancel, sink).await;
+        // 自动连锁部署同样落部署记录（ticket 12）；记录失败不影响部署。
+        let _ = deploy_history::record_outcomes(&store, &summary);
         if let Some(reg) = emitter_for_state.try_state::<DeployRegistry>() {
             reg.unregister(deploy_id);
         }

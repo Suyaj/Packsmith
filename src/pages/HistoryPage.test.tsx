@@ -111,6 +111,26 @@ describe("构建历史页", () => {
     expect(await screen.findByText(/BUILD SUCCESS/)).toBeInTheDocument();
   });
 
+  // 首页最近打包记录点击跳转 ?entry=<id>：直达该条目的日志详情。
+  it("支持 ?entry= 深链直达对应条目的日志", async () => {
+    mockBackend({
+      list_build_history: () => entries,
+      list_projects: () => projects,
+      read_build_log: (args) => {
+        expect(args).toMatchObject({ buildId: "build-1-100" });
+        return "[ERROR] BUILD FAILURE";
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/history?entry=1"]}>
+        <HistoryPage />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByTestId("history-log-1")).toHaveTextContent(/BUILD FAILURE/);
+  });
+
   it("删除一条历史：构件与日志一并删除并刷新列表", async () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     mockBackend({

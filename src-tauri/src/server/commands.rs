@@ -222,3 +222,38 @@ pub fn accept_host_key(
 ) -> Result<(), String> {
     repo::store_host_fingerprint(&store, &host, port, &fingerprint).map_err(|e| e.to_string())
 }
+
+// ---------------------------------------------------------------------------
+// 首页服务器概览（ticket 12）
+// ---------------------------------------------------------------------------
+
+/// TCP 可达性结果：`reachable` + 失败细节（首页服务器卡片）。
+#[derive(Debug, Clone, Serialize)]
+pub struct ReachabilityDto {
+    pub reachable: bool,
+    pub detail: Option<String>,
+}
+
+/// 首页连接状态：便宜的 TCP 层探测（3s 超时）。只证明端口有响应，
+/// 不含 SSH 认证——完整测试用服务器管理页的连接测试。
+#[tauri::command]
+pub async fn check_server_reachable(host: String, port: u16) -> Result<ReachabilityDto, String> {
+    Ok(match super::reachability::tcp_probe(&host, port, super::reachability::PROBE_TIMEOUT).await {
+        Ok(()) => ReachabilityDto {
+            reachable: true,
+            detail: None,
+        },
+        Err(detail) => ReachabilityDto {
+            reachable: false,
+            detail: Some(detail),
+        },
+    })
+}
+
+/// 最近成功部署时间（首页服务器卡片）：每台已知服务器一行，从未部署为 null。
+#[tauri::command]
+pub fn list_server_last_deploys(
+    store: State<'_, Store>,
+) -> Result<Vec<crate::store::deploy_history::ServerLastDeploy>, String> {
+    crate::store::deploy_history::last_successful_per_server(&store).map_err(|e| e.to_string())
+}

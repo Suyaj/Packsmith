@@ -7,6 +7,9 @@
 
 /// 构建历史 (Build History): per-build records, artifact listing, retention.
 pub mod history;
+/// 部署记录 (Deploy Records, ticket 12): per-target deploy outcomes, feeding
+/// the homepage's per-server 最近部署时间.
+pub mod deploy_history;
 /// Encryption key lifecycle: generation + OS-keychain storage.
 pub mod key;
 mod migrations;

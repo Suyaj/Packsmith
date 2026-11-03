@@ -104,6 +104,17 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         name: "ticket 10: deployment_targets.auto_deploy (构建成功后自动连锁部署, 默认关)",
         sql: "ALTER TABLE deployment_targets ADD COLUMN auto_deploy INTEGER NOT NULL DEFAULT 0;",
     },
+    Migration {
+        version: 10,
+        name: "ticket 12: deploy_records (每次部署的目标结果, 供首页最近部署时间)",
+        sql: "CREATE TABLE deploy_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            target_id INTEGER NOT NULL REFERENCES deployment_targets(id) ON DELETE CASCADE,
+            success INTEGER NOT NULL CHECK (success IN (0, 1)),
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        );
+        CREATE INDEX idx_deploy_records_target ON deploy_records(target_id);",
+    },
 ];
 
 pub(crate) const LATEST_SCHEMA_VERSION: i32 = MIGRATIONS[MIGRATIONS.len() - 1].version;
