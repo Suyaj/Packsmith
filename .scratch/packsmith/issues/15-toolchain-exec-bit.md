@@ -9,9 +9,10 @@
 
 **Blocked by:** None（基于集成 tip）
 
-**Status:** ready-for-agent
+**Status:** resolved
+<!-- 诊断：extract_zip 丢弃 zip 条目 unix_mode（一律 0644）；find_executable_in 只查 is_file() 不查执行位，坏安装未被拦截。 -->
 
-- [ ] 回归测试：zip（带 unix_mode 0755）解压后执行位保留（修复前红、修复后绿）
-- [ ] extract_zip 应用 unix_mode；zip-slip 防御不回退（既有测试仍绿）
-- [ ] 安装校验：注册的可执行文件无执行位时 chmod 自愈/报错，坏安装无法产生
-- [ ] 全套测试绿：cargo（0 警告）/ npm / build
+- [x] 回归测试：zip（带 unix_mode 0755）解压后执行位保留（修复前红、修复后绿）
+- [x] extract_zip 应用 unix_mode；zip-slip 防御不回退（既有测试仍绿）
+- [x] 安装校验：注册的可执行文件无执行位时 chmod 自愈/报错，坏安装无法产生
+- [x] 全套测试绿：cargo（0 警告）/ npm / build
