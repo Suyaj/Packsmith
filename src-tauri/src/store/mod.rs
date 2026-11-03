@@ -12,7 +12,7 @@ pub mod projects;
 mod migrations;
 
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
 
@@ -88,7 +88,15 @@ impl From<keyring::Error> for StoreError {
 /// [`Store::with`] from any thread. The same connection is reused, so data
 /// written through one handle is visible to all others.
 pub struct Store {
-    conn: Mutex<Connection>,
+    conn: Arc<Mutex<Connection>>,
+}
+
+impl Clone for Store {
+    fn clone(&self) -> Self {
+        Store {
+            conn: Arc::clone(&self.conn),
+        }
+    }
 }
 
 impl std::fmt::Debug for Store {
@@ -148,7 +156,7 @@ impl Store {
         migrations::run(&conn)?;
 
         Ok(Store {
-            conn: Mutex::new(conn),
+            conn: Arc::new(Mutex::new(conn)),
         })
     }
 
