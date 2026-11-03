@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Channel } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import {
@@ -320,6 +321,14 @@ function SettingsPage() {
   const { t } = useTranslation();
   const [rows, setRows] = useState<Rows | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+
+  useEffect(() => {
+    // 应用版本信息（spec：设置页展示 tauri 版本）。读取失败不阻塞页面。
+    getVersion()
+      .then(setAppVersion)
+      .catch(() => {});
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -387,7 +396,14 @@ function SettingsPage() {
 
   return (
     <section>
-      <h1 className="text-2xl font-semibold">{t("settings.title")}</h1>
+      <div className="flex items-baseline justify-between">
+        <h1 className="text-2xl font-semibold">{t("settings.title")}</h1>
+        {appVersion !== null && (
+          <p className="text-sm text-muted-foreground" data-testid="app-version">
+            {t("settings.appVersion", { version: appVersion })}
+          </p>
+        )}
+      </div>
       <Card className="mt-4">
         <CardHeader>
           <CardTitle>{t("settings.toolchain.title")}</CardTitle>
@@ -414,6 +430,9 @@ function SettingsPage() {
               ))}
             </ul>
           )}
+          <p className="mt-3 text-xs text-muted-foreground" data-testid="m2-repo-path">
+            {t("settings.toolchain.dependencyRepo")}
+          </p>
         </CardContent>
       </Card>
       <RetentionCard />

@@ -3,7 +3,7 @@
 //! All access goes through [`Store::with`]; the connection never leaks
 //! further out. Command groups are stored normalized: split on newlines,
 //! each line trimmed, blank lines dropped, order preserved (see
-//! [`split_commands`]).
+//! [`split_command_group`]).
 
 use rusqlite::{OptionalExtension, params};
 
@@ -35,7 +35,7 @@ pub struct Target {
 
 /// Splits a 命令组 (command group) into its commands: one per line, each
 /// trimmed, blank lines dropped, order preserved.
-pub fn split_commands(text: &str) -> Vec<String> {
+pub fn split_command_group(text: &str) -> Vec<String> {
     text.lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
@@ -45,7 +45,7 @@ pub fn split_commands(text: &str) -> Vec<String> {
 
 /// Normalizes a command group for storage (what round-trips back out).
 pub fn normalize_commands(text: &str) -> String {
-    split_commands(text).join("\n")
+    split_command_group(text).join("\n")
 }
 
 const SELECT_COLUMNS: &str =

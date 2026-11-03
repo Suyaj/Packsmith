@@ -225,6 +225,30 @@ pub fn update(store: &Store, server: &Server) -> Result<Server, RepoError> {
     Ok(server.clone())
 }
 
+/// 读取单个服务器（含完整凭据）。凭据只在后端内部流转，从不明文回传前端。
+pub fn get(store: &Store, id: i64) -> Result<Option<Server>, RepoError> {
+    let row = store.with(|conn| {
+        conn.query_row(
+            &format!("SELECT {SELECT_COLUMNS} FROM servers WHERE id = ?1"),
+            [id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                ))
+            },
+        )
+        .optional()
+    })?;
+    row.map(raw_to_server).transpose()
+}
+
 /// Deletes a server. Returns whether a row was actually removed.
 pub fn delete(store: &Store, id: i64) -> Result<bool, RepoError> {
     let changed =

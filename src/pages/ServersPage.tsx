@@ -5,11 +5,13 @@ import {
   createServer,
   deleteServer,
   listServers,
+  testSavedServerConnection,
   testServerConnection,
   updateServer,
-  type Credential,
+  type CredentialInput,
   type Server,
   type ServerInput,
+  type ServerUpdateInput,
   type TestOutcome,
 } from "@/lib/serversApi";
 import { Button } from "@/components/ui/button";
@@ -44,35 +46,53 @@ const EMPTY_FORM: FormState = {
   privateKeyPassphrase: "",
 };
 
-function formToInput(form: FormState): ServerInput {
-  const credential: Credential =
-    form.authMethod === "password"
-      ? { type: "password", password: form.password }
-      : {
-          type: "private_key",
-          path: form.privateKeyPath,
-          passphrase: form.privateKeyPassphrase === "" ? null : form.privateKeyPassphrase,
-        };
-  return {
+function formToInput(
+  form: FormState,
+  editing: Server | null,
+): ServerInput | ServerUpdateInput {
+  const base = {
     host: form.host.trim(),
     port: Number.parseInt(form.port, 10) || 22,
     username: form.username.trim(),
-    credential,
   };
-}
-
-function serverToInput(server: Server): ServerInput {
-  return {
-    host: server.host,
-    port: server.port,
-    username: server.username,
-    credential: server.credential,
+  if (form.authMethod === "password") {
+    if (form.password === "") {
+      // 编辑态密码留空 = 保持现有密码（后端整体保持凭据）。校验层保证只有
+      // 原凭据就是密码时才可能走到这里。
+      return { ...base, credential: null };
+    }
+    return { ...base, credential: { type: "password", password: form.password } };
+  }
+  // 私钥：路径可见可编辑；口令是机密——留空且原口令存在时省略字段
+  // （undefined 序列化后被丢弃），即"保持现有口令"。
+  const keepPassphrase =
+    editing !== null &&
+    editing.credential.type === "private_key" &&
+    editing.credential.has_passphrase &&
+    form.privateKeyPassphrase === "";
+  const credential: CredentialInput = {
+    type: "private_key",
+    path: form.privateKeyPath,
+    passphrase: keepPassphrase
+      ? undefined
+      : form.privateKeyPassphrase === ""
+        ? null
+        : form.privateKeyPassphrase,
   };
+  return { ...base, credential };
 }
 
 /// A stable key under which each test result is tracked (one per list row,
 /// one for the unsaved form).
 type TestKey = string;
+
+/**
+ * 连接测试目标：表单值（新建 / 编辑中改了凭据）或已保存服务器（用后端
+ * 存储的凭据测试——凭据不回传前端，编辑留空时只能（也应该）测存储值）。
+ */
+type TestTarget =
+  | { kind: "form"; input: ServerInput }
+  | { kind: "saved"; server: Server };
 
 function outcomeText(
   outcome: TestOutcome,
@@ -101,6 +121,7 @@ function ServersPage() {
   const [servers, setServers] = useState<Server[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
+  const [editingServer, setEditingServer] = useState<Server | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<
     Record<TestKey, TestOutcome | "loading">
@@ -123,10 +144,13 @@ function ServersPage() {
   }, [refresh]);
 
   const runTest = useCallback(
-    async (key: TestKey, input: ServerInput, acceptUnknownHostKey: boolean) => {
+    async (key: TestKey, target: TestTarget, acceptUnknownHostKey: boolean) => {
       setTestResults((prev) => ({ ...prev, [key]: "loading" }));
       try {
-        const outcome = await testServerConnection(input, acceptUnknownHostKey);
+        const outcome =
+          target.kind === "form"
+            ? await testServerConnection(target.input, acceptUnknownHostKey)
+            : await testSavedServerConnection(target.server.id, acceptUnknownHostKey);
         setTestResults((prev) => ({ ...prev, [key]: outcome }));
       } catch (e) {
         setTestResults((prev) => ({
@@ -144,53 +168,59 @@ function ServersPage() {
   const acceptAndRetry = useCallback(
     async (
       key: TestKey,
-      input: ServerInput,
+      target: TestTarget,
       fingerprint: string,
       updateStored: boolean,
     ) => {
       if (updateStored) {
+        const host = target.kind === "form" ? target.input.host : target.server.host;
+        const port = target.kind === "form" ? target.input.port : target.server.port;
         try {
-          await acceptHostKey(input.host, input.port, fingerprint);
+          await acceptHostKey(host, port, fingerprint);
         } catch {
           // fall through to the retry, which will re-report the problem
         }
       }
-      void runTest(key, input, !updateStored);
+      void runTest(key, target, !updateStored);
     },
     [runTest],
   );
 
   const openCreate = () => {
     setSaveError(null);
+    setEditingServer(null);
     setForm({ ...EMPTY_FORM });
   };
 
   const openEdit = (server: Server) => {
     setSaveError(null);
+    setEditingServer(server);
+    // 凭据不回传：密码 / 口令一律留空（留空 = 保持不变）；私钥路径不是
+    // 机密，直接展示。
     setForm({
       editingId: server.id,
       host: server.host,
       port: String(server.port),
       username: server.username,
       authMethod: server.credential.type === "password" ? "password" : "private_key",
-      password: server.credential.type === "password" ? server.credential.password : "",
+      password: "",
       privateKeyPath:
         server.credential.type === "private_key" ? server.credential.path : "",
-      privateKeyPassphrase:
-        server.credential.type === "private_key" ? server.credential.passphrase ?? "" : "",
+      privateKeyPassphrase: "",
     });
   };
 
   const handleSave = async () => {
     if (!form) return;
-    const input = formToInput(form);
+    const input = formToInput(form, editingServer);
     try {
       if (form.editingId === null) {
-        await createServer(input);
+        await createServer(input as ServerInput);
       } else {
-        await updateServer(form.editingId, input);
+        await updateServer(form.editingId, input as ServerUpdateInput);
       }
       setForm(null);
+      setEditingServer(null);
       setSaveError(null);
       await refresh();
     } catch (e) {
@@ -204,17 +234,30 @@ function ServersPage() {
     await refresh();
   };
 
+  // 密码仅在新建（或编辑时更换了新值）必填；编辑态留空 = 保持现有密码。
   const inputValid = (f: FormState) =>
     f.host.trim() !== "" &&
     f.username.trim() !== "" &&
     (f.authMethod === "password"
-      ? f.password !== ""
-      : f.privateKeyPath.trim() !== "");
+      ? f.password !== "" ||
+        (editingServer !== null && editingServer.credential.type === "password")
+      : f.privateKeyPath !== "");
 
-  const renderTestSection = (
-    key: TestKey,
-    input: ServerInput,
-  ) => {
+  /**
+   * 编辑表单的连接测试目标：机密字段留空（= 保持现状）时只能测已保存
+   * 凭据（走后端）；用户输入了完整新凭据时按表单值测试。
+   */
+  const formTestTarget = (f: FormState): TestTarget => {
+    if (editingServer !== null) {
+      const keepsSecret =
+        (f.authMethod === "password" && f.password === "") ||
+        (f.authMethod === "private_key" && f.privateKeyPassphrase === "");
+      if (keepsSecret) return { kind: "saved", server: editingServer };
+    }
+    return { kind: "form", input: formToInput(f, editingServer) as ServerInput };
+  };
+
+  const renderTestSection = (key: TestKey, target: TestTarget) => {
     const outcome = testResults[key];
     return (
       <div className="mt-2" data-testid={`test-section-${key}`}>
@@ -222,7 +265,7 @@ function ServersPage() {
           variant="outline"
           size="sm"
           disabled={outcome === "loading"}
-          onClick={() => void runTest(key, input, false)}
+          onClick={() => void runTest(key, target, false)}
         >
           {outcome === "loading" ? t("servers.testing") : t("servers.test")}
         </Button>
@@ -247,7 +290,7 @@ function ServersPage() {
                   <Button
                     size="sm"
                     onClick={() =>
-                      void acceptAndRetry(key, input, outcome.fingerprint, false)
+                      void acceptAndRetry(key, target, outcome.fingerprint, false)
                     }
                   >
                     {t("servers.result.hostKeyUnknownAccept")}
@@ -257,7 +300,7 @@ function ServersPage() {
                     size="sm"
                     variant="destructive"
                     onClick={() =>
-                      void acceptAndRetry(key, input, outcome.fingerprint, true)
+                      void acceptAndRetry(key, target, outcome.fingerprint, true)
                     }
                   >
                     {t("servers.result.hostKeyUpdate")}
@@ -337,11 +380,25 @@ function ServersPage() {
               </label>
               {form.authMethod === "password" ? (
                 <label className="flex flex-col gap-1 md:col-span-2">
-                  <span>{t("servers.password")}</span>
+                  <span>
+                    {t("servers.password")}
+                    {editingServer !== null &&
+                      editingServer.credential.type === "password" && (
+                        <span className="ml-2 text-xs text-muted-foreground">
+                          {t("servers.credentialSetPassword")}
+                        </span>
+                      )}
+                  </span>
                   <input
                     className="rounded border px-2 py-1"
                     aria-label={t("servers.password")}
                     type="password"
+                    placeholder={
+                      editingServer !== null &&
+                      editingServer.credential.type === "password"
+                        ? t("servers.keepUnchanged")
+                        : undefined
+                    }
                     value={form.password}
                     onChange={(e) => setForm({ ...form, password: e.target.value })}
                   />
@@ -360,11 +417,27 @@ function ServersPage() {
                     />
                   </label>
                   <label className="flex flex-col gap-1">
-                    <span>{t("servers.privateKeyPassphrase")}</span>
+                    <span>
+                      {t("servers.privateKeyPassphrase")}
+                      {editingServer !== null &&
+                        editingServer.credential.type === "private_key" &&
+                        editingServer.credential.has_passphrase && (
+                          <span className="ml-2 text-xs text-muted-foreground">
+                            {t("servers.credentialSetPassphrase")}
+                          </span>
+                        )}
+                    </span>
                     <input
                       className="rounded border px-2 py-1"
                       aria-label={t("servers.privateKeyPassphrase")}
                       type="password"
+                      placeholder={
+                        editingServer !== null &&
+                        editingServer.credential.type === "private_key" &&
+                        editingServer.credential.has_passphrase
+                          ? t("servers.keepUnchanged")
+                          : undefined
+                      }
                       value={form.privateKeyPassphrase}
                       onChange={(e) =>
                         setForm({ ...form, privateKeyPassphrase: e.target.value })
@@ -391,7 +464,7 @@ function ServersPage() {
             </div>
 
             {inputValid(form) &&
-              renderTestSection("form", formToInput(form))}
+              renderTestSection("form", formTestTarget(form))}
           </CardContent>
         </Card>
       )}
@@ -421,7 +494,11 @@ function ServersPage() {
                   {t("servers.delete")}
                 </Button>
               </div>
-              {renderTestSection(`server-${server.id}`, serverToInput(server))}
+              {/* 已保存服务器用存储凭据测试：凭据不出后端。 */}
+              {renderTestSection(`server-${server.id}`, {
+                kind: "saved",
+                server,
+              })}
             </CardContent>
           </Card>
         ))}

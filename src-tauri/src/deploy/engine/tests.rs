@@ -114,8 +114,8 @@ fn job(id: i64, upload_dir: &str, stop: &str, start: &str) -> TargetJob {
     TargetJob {
         target_id: id,
         upload_dir: upload_dir.into(),
-        stop_commands: super::split_commands(stop),
-        start_commands: super::split_commands(start),
+        stop_commands: super::split_command_group(stop),
+        start_commands: super::split_command_group(start),
         conn: conn(id),
     }
 }
@@ -655,17 +655,17 @@ async fn upload_progress_is_reported() {
 }
 
 #[test]
-fn split_commands_trims_and_drops_blank_lines() {
+fn split_command_group_trims_and_drops_blank_lines() {
     assert_eq!(
-        super::split_commands("  cd /app  \n\n sh start.sh \n"),
+        super::split_command_group("  cd /app  \n\n sh start.sh \n"),
         vec!["cd /app", "sh start.sh"]
     );
-    assert!(super::split_commands(" \n ").is_empty());
+    assert!(super::split_command_group(" \n ").is_empty());
 }
 
 #[test]
 fn join_group_runs_commands_serially_as_one_unit() {
-    let joined = super::join_group(&super::split_commands("cd /app\nsh stop.sh"));
+    let joined = super::join_group(&super::split_command_group("cd /app\nsh stop.sh"));
     assert_eq!(joined.as_deref(), Some("cd /app && sh stop.sh"));
     assert!(super::join_group(&[]).is_none());
 }

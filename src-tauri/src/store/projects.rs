@@ -47,6 +47,18 @@ impl ProjectType {
             other => Err(ProjectError::InvalidType(other.to_string())),
         }
     }
+
+    /// v1 只允许创建 Maven；Gradle 仅作 UI disabled 占位与数据库兼容值存在
+    /// （迁移 v3 CHECK 不动）。所有创建路径（git 记录 / clone / 本地导入）
+    /// 在写库前统一经过这里拒绝。
+    pub fn assert_creatable(self) -> Result<(), ProjectError> {
+        match self {
+            ProjectType::Maven => Ok(()),
+            ProjectType::Gradle => Err(ProjectError::UnsupportedCreationType(
+                self.as_str().to_string(),
+            )),
+        }
+    }
 }
 
 /// 项目来源：git clone 或本地导入。
@@ -122,6 +134,9 @@ pub enum ProjectError {
     /// 未支持的项目类型值。
     #[error("unsupported project type {0:?}")]
     InvalidType(String),
+    /// 该类型暂不可创建（v1 仅 Maven；Gradle 为 disabled 占位）。
+    #[error("project type {0:?} cannot be created yet (v1 supports Maven only)")]
+    UnsupportedCreationType(String),
     /// 克隆被用户取消。
     #[error("clone was cancelled")]
     Cancelled,
@@ -154,6 +169,7 @@ impl ProjectError {
             ProjectError::PathNotFound(_) => "path_not_found",
             ProjectError::DirectoryExists(_) => "directory_exists",
             ProjectError::InvalidType(_) => "invalid_type",
+            ProjectError::UnsupportedCreationType(_) => "unsupported_project_type",
             ProjectError::Cancelled => "cancelled",
             ProjectError::Clone(_) => "clone_failed",
             ProjectError::BranchListing(_) => "branch_listing_failed",
@@ -291,6 +307,7 @@ pub fn create_git_record(
     path: &str,
     project_type: ProjectType,
 ) -> Result<Project, ProjectError> {
+    project_type.assert_creatable()?;
     validate_new_git(store, name, url)?;
     insert_git_project(store, name, url, path, project_type)
 }
@@ -304,6 +321,7 @@ pub fn import(
     path: &Path,
     project_type: ProjectType,
 ) -> Result<Project, ProjectError> {
+    project_type.assert_creatable()?;
     validate_name(name)?;
     let path = path
         .canonicalize()

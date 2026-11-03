@@ -184,3 +184,25 @@ fn credentials_are_not_readable_from_the_raw_database_file() {
         );
     }
 }
+
+#[test]
+fn get_returns_the_persisted_server_including_credential() {
+    let (_dir, store) = open_store();
+
+    let created = repo::create(
+        &store,
+        &NewServer {
+            host: "web-1.example.com".into(),
+            port: 22,
+            username: "deploy".into(),
+            credential: Credential::Password {
+                password: "s3cret".into(),
+            },
+        },
+    )
+    .unwrap();
+
+    let fetched = repo::get(&store, created.id).unwrap().unwrap();
+    assert_eq!(fetched, created);
+    assert!(repo::get(&store, 999).unwrap().is_none());
+}

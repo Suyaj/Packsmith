@@ -132,10 +132,7 @@ pub fn artifacts_dir_for(appdata: &Path, project_name: &str, at: SystemTime) -> 
     let base = timestamp_dir_name(at);
     let mut dir = project_dir.join(&base);
     if dir.exists() {
-        let nanos = at
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
+        let nanos = super::nanos_since_epoch(at);
         dir = project_dir.join(format!("{base}-{nanos}"));
     }
     dir

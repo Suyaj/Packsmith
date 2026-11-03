@@ -46,6 +46,7 @@ pub fn run() {
             server::commands::update_server,
             server::commands::delete_server,
             server::commands::test_server_connection,
+            server::commands::test_saved_server_connection,
             server::commands::accept_host_key,
             server::commands::check_server_reachable,
             server::commands::list_server_last_deploys,

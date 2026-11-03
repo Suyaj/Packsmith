@@ -180,7 +180,10 @@ impl DeployTransport for SshTransport {
                 .channel_open_session()
                 .await
                 .map_err(unreachable)?;
-            channel.exec(true, command).await.map_err(unreachable)?;
+            channel
+                .exec(true, wrap_sh_c(command))
+                .await
+                .map_err(unreachable)?;
 
             let mut combined = String::new();
             let mut exit_code: Option<u32> = None;
@@ -312,5 +315,40 @@ fn join_remote_path(dir: &str, file_name: &str) -> String {
         format!("{dir}{file_name}")
     } else {
         format!("{dir}/{file_name}")
+    }
+}
+
+/// 把命令组包进显式 `sh -c '...'` 再交给 channel.exec：命令组按 POSIX sh
+/// 语义（`&&` fail-fast、逐条串行）执行，不依赖登录 shell 的解释行为。
+/// 单引号按 POSIX 方式转义（`'\''`）。
+fn wrap_sh_c(command: &str) -> String {
+    format!("sh -c '{}'", command.replace('\'', "'\\''"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wrap_sh_c;
+
+    #[test]
+    fn wraps_command_group_in_explicit_sh_c() {
+        // `&&` fail-fast 语义保留在引号内部，由 sh 解释，而非依赖登录 shell。
+        assert_eq!(
+            wrap_sh_c("cd /srv/app && sh stop.sh && sleep 1"),
+            "sh -c 'cd /srv/app && sh stop.sh && sleep 1'"
+        );
+    }
+
+    #[test]
+    fn escapes_single_quotes_inside_the_group() {
+        // POSIX 单引号转义：'\'' —— 外层引号闭合、转义引号、重新闭合。
+        assert_eq!(
+            wrap_sh_c("echo 'hello world'"),
+            r"sh -c 'echo '\''hello world'\'''"
+        );
+    }
+
+    #[test]
+    fn plain_command_is_wrapped_unchanged() {
+        assert_eq!(wrap_sh_c("sh start.sh --prod"), "sh -c 'sh start.sh --prod'");
     }
 }

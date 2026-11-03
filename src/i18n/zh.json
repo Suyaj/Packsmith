@@ -123,6 +123,7 @@
       "invalid_name": "项目名称不能为空且不能包含路径分隔符",
       "directory_exists": "目标目录已存在，请更换项目名称或工作区",
       "invalid_type": "不支持的项目类型",
+      "unsupported_project_type": "暂不支持创建该类型项目：v1 仅支持 Maven（Java）",
       "clone_failed": "克隆失败：{{message}}",
       "branch_listing_failed": "获取分支列表失败：{{message}}",
       "project_not_found": "项目不存在",
@@ -161,6 +162,9 @@
     "password": "密码",
     "privateKeyPath": "私钥路径",
     "privateKeyPassphrase": "私钥口令（可选）",
+    "keepUnchanged": "留空保持不变",
+    "credentialSetPassword": "已设置密码",
+    "credentialSetPassphrase": "已设置私钥口令",
     "result": {
       "success": "连接成功",
       "authFailedPassword": "认证失败：密码被服务器拒绝",
@@ -213,6 +217,7 @@
   "settings": {
     "title": "设置",
     "empty": "设置项即将可用",
+    "appVersion": "应用版本：{{version}}",
     "retention": {
       "title": "构件库保留策略",
       "description": "每个项目在产物库中保留最近 N 次构建的构件与日志，超出自动清理。",
@@ -228,6 +233,7 @@
       "loadError": "检测失败：{{error}}",
       "notOnPath": "未在本机检测到",
       "managedVersion": "托管版本 {{version}}",
+      "dependencyRepo": "依赖仓库：<appdata>/m2-repo（持久保留、从不删除，构建间复用依赖缓存）",
       "download": "下载托管",
       "retry": "重试",
       "state": {

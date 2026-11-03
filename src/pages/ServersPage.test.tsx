@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -19,12 +19,17 @@ function passwordServer(overrides: Partial<Server> = {}): Server {
     host: "web-1.example.com",
     port: 22,
     username: "deploy",
-    credential: { type: "password", password: "s3cret" },
+    // 列表接口只返回凭据摘要，不含明文密码
+    credential: { type: "password" },
     ...overrides,
   };
 }
 
-function keyServer(overrides: Partial<Server> = {}): Server {
+function keyServer(
+  overrides: Partial<Omit<Server, "credential">> & {
+    credential?: Server["credential"];
+  } = {},
+): Server {
   return {
     id: 2,
     host: "db-1.example.com",
@@ -33,7 +38,7 @@ function keyServer(overrides: Partial<Server> = {}): Server {
     credential: {
       type: "private_key",
       path: "/home/root/.ssh/id_ed25519",
-      passphrase: null,
+      has_passphrase: false,
     },
     ...overrides,
   };
@@ -127,7 +132,7 @@ describe("服务器管理页", () => {
     });
   });
 
-  it("编辑：表单回填已有值，update_server 携带 id", async () => {
+  it("编辑：凭据不回传明文，留空保存 = 保持现状（credential: null）", async () => {
     invokeMock.mockImplementation(async (command: string) => {
       if (command === "list_servers") return [passwordServer()];
       if (command === "update_server") return passwordServer();
@@ -137,9 +142,12 @@ describe("服务器管理页", () => {
     render(<ServersPage />);
     await userEvent.click(await screen.findByRole("button", { name: "编辑" }));
 
+    // 凭据字段留空，带"保持不变"占位与"已设置"指示
     expect(screen.getByLabelText("主机")).toHaveValue("web-1.example.com");
     expect(screen.getByLabelText("用户名")).toHaveValue("deploy");
-    expect(screen.getByLabelText("密码")).toHaveValue("s3cret");
+    expect(screen.getByLabelText("密码")).toHaveValue("");
+    expect(screen.getByLabelText("密码")).toHaveAttribute("placeholder", "留空保持不变");
+    expect(screen.getByText("已设置密码")).toBeInTheDocument();
 
     await userEvent.clear(screen.getByLabelText("主机"));
     await userEvent.type(screen.getByLabelText("主机"), "web-9.example.com");
@@ -151,6 +159,79 @@ describe("服务器管理页", () => {
     const payload = expectInvoke("update_server");
     expect(payload.id).toBe(1);
     expect(payload.host).toBe("web-9.example.com");
+    // 密码留空 = 保持现有密码，整体传 null
+    expect(payload.credential).toBeNull();
+  });
+
+  it("编辑：输入新密码时按新值保存", async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "list_servers") return [passwordServer()];
+      if (command === "update_server") return passwordServer();
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    render(<ServersPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "编辑" }));
+
+    await userEvent.type(screen.getByLabelText("密码"), "new-pass");
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => {
+      expectInvoke("update_server");
+    });
+    const payload = expectInvoke("update_server");
+    expect(payload.credential).toEqual({ type: "password", password: "new-pass" });
+  });
+
+  it("编辑：私钥口令已设置时留空保存 = 保持口令（省略字段）", async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "list_servers") return [keyServer({ credential: { type: "private_key", path: "/home/root/.ssh/id_ed25519", has_passphrase: true } })];
+      if (command === "update_server") return keyServer({ credential: { type: "private_key", path: "/home/root/.ssh/id_ed25519", has_passphrase: true } });
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    render(<ServersPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "编辑" }));
+
+    // 私钥路径可见，口令留空且带"已设置"指示
+    expect(screen.getByLabelText("私钥路径")).toHaveValue("/home/root/.ssh/id_ed25519");
+    expect(screen.getByLabelText("私钥口令（可选）")).toHaveValue("");
+    expect(screen.getByText("已设置私钥口令")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => {
+      expectInvoke("update_server");
+    });
+    const payload = expectInvoke("update_server");
+    // 口令字段整体缺席 = 保持现有口令（序列化后该字段被丢弃）
+    expect(JSON.stringify(payload.credential)).not.toContain("passphrase");
+    expect(payload.credential).toEqual({
+      type: "private_key",
+      path: "/home/root/.ssh/id_ed25519",
+    });
+  });
+
+  it("编辑：私钥口令未设置时留空保存 = 显式无口令", async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "list_servers") return [keyServer()];
+      if (command === "update_server") return keyServer();
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    render(<ServersPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "编辑" }));
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => {
+      expectInvoke("update_server");
+    });
+    const payload = expectInvoke("update_server");
+    expect(payload.credential).toEqual({
+      type: "private_key",
+      path: "/home/root/.ssh/id_ed25519",
+      passphrase: null,
+    });
   });
 
   it("删除：确认后调用 delete_server 并刷新列表", async () => {
@@ -174,7 +255,7 @@ describe("服务器管理页", () => {
   it("连接测试成功时展示成功", async () => {
     invokeMock.mockImplementation(async (command: string) => {
       if (command === "list_servers") return [passwordServer()];
-      if (command === "test_server_connection") {
+      if (command === "test_saved_server_connection") {
         return { status: "success", new_fingerprint: null };
       }
       throw new Error(`unexpected command ${command}`);
@@ -186,12 +267,15 @@ describe("服务器管理页", () => {
     );
 
     expect(await screen.findByText("连接成功")).toBeInTheDocument();
+    // 列表行连接测试用存储凭据（后端侧），凭据不回传前端
+    const payload = expectInvoke("test_saved_server_connection");
+    expect(payload).toEqual({ id: 1, acceptUnknownHostKey: false });
   });
 
   it("密码被拒绝时展示认证失败原因", async () => {
     invokeMock.mockImplementation(async (command: string) => {
       if (command === "list_servers") return [passwordServer()];
-      if (command === "test_server_connection") {
+      if (command === "test_saved_server_connection") {
         return { status: "auth_failed", method: "password" };
       }
       throw new Error(`unexpected command ${command}`);
@@ -210,7 +294,7 @@ describe("服务器管理页", () => {
   it("私钥被拒绝时展示私钥认证失败原因", async () => {
     invokeMock.mockImplementation(async (command: string) => {
       if (command === "list_servers") return [keyServer()];
-      if (command === "test_server_connection") {
+      if (command === "test_saved_server_connection") {
         return { status: "auth_failed", method: "private_key" };
       }
       throw new Error(`unexpected command ${command}`);
@@ -229,7 +313,7 @@ describe("服务器管理页", () => {
   it("无法连接时展示具体错误", async () => {
     invokeMock.mockImplementation(async (command: string) => {
       if (command === "list_servers") return [passwordServer()];
-      if (command === "test_server_connection") {
+      if (command === "test_saved_server_connection") {
         return {
           status: "unreachable",
           detail: "Connection refused (os error 61)",
@@ -253,7 +337,7 @@ describe("服务器管理页", () => {
     let callCount = 0;
     invokeMock.mockImplementation(async (command: string) => {
       if (command === "list_servers") return [passwordServer()];
-      if (command === "test_server_connection") {
+      if (command === "test_saved_server_connection") {
         callCount += 1;
         if (callCount === 1) {
           return { status: "host_key_unknown", fingerprint: FINGERPRINT };
@@ -279,7 +363,7 @@ describe("服务器管理页", () => {
 
     expect(await screen.findByText("连接成功")).toBeInTheDocument();
     const retryPayload = invokeMock.mock.calls.filter(
-      ([c]) => c === "test_server_connection",
+      ([c]) => c === "test_saved_server_connection",
     )[1]![1] as Record<string, unknown>;
     expect(retryPayload.acceptUnknownHostKey).toBe(true);
   });
@@ -288,7 +372,7 @@ describe("服务器管理页", () => {
     const FINGERPRINT = "SHA256:BBBB2222bbbbCCCCddddEEEEffff000011112222";
     invokeMock.mockImplementation(async (command: string) => {
       if (command === "list_servers") return [passwordServer()];
-      if (command === "test_server_connection") {
+      if (command === "test_saved_server_connection") {
         return { status: "host_key_changed", fingerprint: FINGERPRINT };
       }
       if (command === "accept_host_key") return null;
@@ -318,7 +402,7 @@ describe("服务器管理页", () => {
   it("私钥不可读时展示具体原因", async () => {
     invokeMock.mockImplementation(async (command: string) => {
       if (command === "list_servers") return [keyServer()];
-      if (command === "test_server_connection") {
+      if (command === "test_saved_server_connection") {
         return {
           status: "key_unreadable",
           detail: "wrong passphrase",
@@ -370,6 +454,29 @@ describe("服务器管理页", () => {
 
     await userEvent.type(screen.getByLabelText("主机"), "web-1");
     expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
+  });
+
+  it("编辑密码服务器且密码留空时，表单连接测试走存储凭据（test_saved_server_connection）", async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "list_servers") return [passwordServer()];
+      if (command === "test_saved_server_connection") {
+        return { status: "success", new_fingerprint: null };
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    render(<ServersPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "编辑" }));
+
+    await userEvent.click(
+      within(screen.getByTestId("server-form")).getByRole("button", {
+        name: "连接测试",
+      }),
+    );
+
+    expect(await screen.findByText("连接成功")).toBeInTheDocument();
+    const payload = expectInvoke("test_saved_server_connection");
+    expect(payload).toEqual({ id: 1, acceptUnknownHostKey: false });
   });
 });
 
