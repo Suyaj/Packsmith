@@ -355,3 +355,310 @@ fn 默认构件选择_被记住并可更新() {
         Some("other.war")
     );
 }
+
+// ---------------------------------------------------------------------------
+// 打包流程集成：构件入库（先于临时目录删除）+ 历史记录 + 保留策略
+// ---------------------------------------------------------------------------
+
+use packsmith_lib::build::{self, BuildEvent};
+use std::sync::{Arc, Mutex};
+
+/// 本地 git 仓库（项目源）+ 已注册项目。
+fn fixture_project(dir: &Path, store: &Store, name: &str) -> packsmith_lib::store::projects::Project {
+    let repo_path = dir.join(name);
+    let repo = git2::Repository::init(&repo_path).unwrap();
+    std::fs::write(repo_path.join("pom.xml"), "<project/>").unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(Path::new("pom.xml")).unwrap();
+    index.write().unwrap();
+    let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+    let sig = git2::Signature::now("fixture", "fixture@example.com").unwrap();
+    repo.commit(Some("refs/heads/main"), &sig, &sig, "initial", &tree, &[])
+        .unwrap();
+    projects::import(store, name, &repo_path, ProjectType::Maven).unwrap()
+}
+
+/// 假托管工具链：mvnd 是一个 shell 脚本（`code` 为退出码），外加 JDK 目录布局。
+fn fake_toolchain(dir: &Path, script: &str) -> PathBuf {
+    let tools = dir.join("tools");
+    let mvnd = tools.join("mvnd/bin/mvnd");
+    std::fs::create_dir_all(mvnd.parent().unwrap()).unwrap();
+    std::fs::write(&mvnd, script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&mvnd, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let java = tools.join("jdk/Contents/Home/bin/java");
+    std::fs::create_dir_all(java.parent().unwrap()).unwrap();
+    std::fs::write(&java, "not a real jvm").unwrap();
+    tools
+}
+
+/// 构建成功的假 mvnd：在 target/ 下产出 jar；支持 `-Denvfile=<path>` 导出环境。
+#[cfg(unix)]
+fn success_script(jars: &[&str]) -> String {
+    let mut s = String::from("#!/bin/sh\nmkdir -p target\n");
+    for jar in jars {
+        s.push_str(&format!("echo jar-content-{jar} > target/{jar}\n"));
+    }
+    s.push_str(
+        "for a in \"$@\"; do case \"$a\" in -Denvfile=*) { env; echo \"ARGS: $*\"; } > \"${a#-Denvfile=}\" ;; esac; done\nexit 0\n",
+    );
+    s
+}
+
+#[cfg(unix)]
+fn failure_script() -> String {
+    "#!/bin/sh\necho boom >&2\nexit 3\n".to_string()
+}
+
+struct FlowFixture {
+    _dir: tempfile::TempDir,
+    store: Store,
+    project_id: i64,
+    temp_root: PathBuf,
+    appdata: PathBuf,
+    tools: PathBuf,
+}
+
+#[cfg(unix)]
+fn flow_setup(script: &str, jars: &[&str]) -> FlowFixture {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open_store(dir.path());
+    let project = fixture_project(dir.path(), &store, "demo-app");
+    let tools = fake_toolchain(dir.path(), &success_script(jars));
+    // 覆盖为指定的成败脚本。
+    let mvnd = tools.join("mvnd/bin/mvnd");
+    std::fs::write(&mvnd, script).unwrap();
+    let temp_root = dir.path().join("tmp");
+    let appdata = dir.path().join("appdata");
+    std::fs::create_dir_all(&temp_root).unwrap();
+    std::fs::write(tools.join("jdk/Contents/Home/bin/java"), "not a real jvm").unwrap();
+    FlowFixture {
+        _dir: dir,
+        store,
+        project_id: project.id,
+        temp_root,
+        appdata,
+        tools,
+    }
+}
+
+fn workspaces_in(root: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(root)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.file_name().unwrap().to_string_lossy().starts_with("packsmith-build-"))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+async fn run_flow(fx: &FlowFixture) -> Result<build::BuildOutcome, build::BuildError> {
+    let (events, on_event) = {
+        let events: Arc<Mutex<Vec<BuildEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = events.clone();
+        (
+            events,
+            Arc::new(move |e: BuildEvent| sink.lock().unwrap().push(e))
+                as Arc<dyn Fn(BuildEvent) + Send + Sync>,
+        )
+    };
+    let _ = events;
+    build::run_build_flow_in(
+        fx.store.clone(),
+        &fx.tools,
+        &fx.appdata,
+        &fx.temp_root,
+        fx.project_id,
+        "main",
+        projects::new_cancel_flag(),
+        on_event,
+    )
+    .await
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn 成功构建_构件先入库后删工作区_历史落记录_单构件自动成为默认() {
+    let fx = flow_setup(&success_script(&["app-1.0.jar"]), &["app-1.0.jar"]);
+
+    let outcome = run_flow(&fx).await.expect("build succeeds");
+    assert!(outcome.success);
+
+    // 构件已入库：`<appdata>/artifacts/<项目>/<构建时间>/`，内容与 target 一致。
+    let lib_dir = PathBuf::from(outcome.artifacts_dir.as_ref().expect("成功构建必须有构件目录"));
+    assert!(
+        lib_dir.starts_with(fx.appdata.join("artifacts/demo-app")),
+        "库目录应在 artifacts/<项目>/ 下: {lib_dir:?}"
+    );
+    let jar = lib_dir.join("app-1.0.jar");
+    let jar_content = String::from_utf8_lossy(&std::fs::read(&jar).unwrap()).into_owned();
+    assert_eq!(jar_content.trim_end(), "jar-content-app-1.0.jar");
+
+    // 临时工作区在入库之后才删除。
+    assert!(workspaces_in(&fx.temp_root).is_empty());
+
+    // 历史落记录：成功、分支、日志、构件目录。
+    let rows = history::list(&fx.store, None).unwrap();
+    assert_eq!(rows.len(), 1);
+    let row = &rows[0];
+    assert!(row.success);
+    assert_eq!(row.branch, "main");
+    assert_eq!(row.artifacts_dir.as_deref(), Some(lib_dir.to_str().unwrap()));
+    assert!(Path::new(&row.log_path).is_file());
+    assert_eq!(outcome.history_id, Some(row.id));
+
+    // 单构件自动选中并被记住为项目默认。
+    assert_eq!(
+        projects::get(&fx.store, fx.project_id)
+            .unwrap()
+            .unwrap()
+            .default_artifact
+            .as_deref(),
+        Some("app-1.0.jar")
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn 多构件构建_全部入库但不自动改默认() {
+    let fx = flow_setup(
+        &success_script(&["a-api-1.0.jar", "b-web-1.0.war"]),
+        &["a-api-1.0.jar", "b-web-1.0.war"],
+    );
+
+    let outcome = run_flow(&fx).await.expect("build succeeds");
+
+    assert_eq!(outcome.artifacts.len(), 2);
+    let dir = PathBuf::from(outcome.artifacts_dir.as_ref().unwrap());
+    assert!(dir.join("a-api-1.0.jar").is_file());
+    assert!(dir.join("b-web-1.0.war").is_file());
+    assert!(workspaces_in(&fx.temp_root).is_empty());
+
+    // 多构件时选择权在用户：不自动改默认。
+    assert!(
+        projects::get(&fx.store, fx.project_id)
+            .unwrap()
+            .unwrap()
+            .default_artifact
+            .is_none()
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn 失败构建_历史落失败记录_无构件目录() {
+    let fx = flow_setup(&failure_script(), &[]);
+
+    let outcome = run_flow(&fx).await.expect("failed build still completes");
+    assert!(!outcome.success);
+
+    assert!(outcome.artifacts.is_empty());
+    assert!(outcome.artifacts_dir.is_none());
+    let rows = history::list(&fx.store, None).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert!(!rows[0].success);
+    assert_eq!(rows[0].exit_code, Some(3));
+    assert!(rows[0].artifacts_dir.is_none());
+    assert!(Path::new(&rows[0].log_path).is_file(), "失败构建的日志仍留存");
+    assert!(workspaces_in(&fx.temp_root).is_empty());
+    // 失败构建不留构件目录。
+    assert!(
+        !fx.appdata.join("artifacts").exists() || fx.appdata.join("artifacts").read_dir().unwrap().next().is_none()
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn 保留策略在入库后执行_超出N次的旧构建连文件清理() {
+    let fx = flow_setup(&success_script(&["app-1.0.jar"]), &["app-1.0.jar"]);
+    settings::set_build_retention(&fx.store, 1).unwrap();
+
+    let first = run_flow(&fx).await.unwrap();
+    let second = run_flow(&fx).await.unwrap();
+    assert_ne!(first.artifacts_dir, second.artifacts_dir);
+
+    let rows = history::list(&fx.store, None).unwrap();
+    let build_ids: Vec<&str> = rows.iter().map(|r| r.build_id.as_str()).collect();
+    assert_eq!(build_ids.len(), 1, "保留 1 次：只剩最近一次");
+    assert_eq!(rows[0].build_id, second.build_id);
+
+    assert!(!PathBuf::from(first.artifacts_dir.unwrap()).exists(), "旧构件目录被清理");
+    assert!(!Path::new(first.log_path.as_str()).exists(), "旧日志被清理");
+    assert!(PathBuf::from(second.artifacts_dir.unwrap()).join("app-1.0.jar").is_file());
+    assert!(workspaces_in(&fx.temp_root).is_empty());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn 构建进程环境_依赖仓库指向应用数据目录_用户m2零污染() {
+    let fx = flow_setup(&success_script(&["app-1.0.jar"]), &["app-1.0.jar"]);
+    let env_file = fx._dir.path().join("env.txt");
+    projects::set_build_command(
+        &fx.store,
+        fx.project_id,
+        &format!("mvnd package -Denvfile={}", env_file.display()),
+    )
+    .unwrap();
+
+    // 用户 ~/.m2 顶层两层快照（打包前后内容不变，ADR-0001 验收）。
+    fn snapshot(root: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(root) else { return };
+        for e in entries.flatten() {
+            out.push(e.path());
+            if depth > 0 && e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                snapshot(&e.path(), depth - 1, out);
+            }
+        }
+    }
+    let m2 = std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".m2"));
+    let mut before = Vec::new();
+    if let Some(m2) = &m2 {
+        snapshot(m2, 2, &mut before);
+    }
+
+    let outcome = run_flow(&fx).await.unwrap();
+    assert!(outcome.success);
+
+    let env = std::fs::read_to_string(&env_file).unwrap();
+    // 构建命令统一追加依赖仓库参数，指向 <appdata>/m2-repo（非 ~/.m2）。
+    let repo_flag = env
+        .lines()
+        .find(|l| l.starts_with("MVN_") && l.contains("maven.repo.local"))
+        .or_else(|| env.lines().find(|l| l.contains("maven.repo.local=")))
+        .expect("构建进程环境中必须出现 -Dmaven.repo.local")
+        .to_string();
+    assert!(
+        repo_flag.contains(fx.appdata.join("m2-repo").to_string_lossy().as_ref()),
+        "依赖仓库必须指向应用数据目录: {repo_flag}"
+    );
+    assert!(
+        !repo_flag.contains("/.m2") || repo_flag.contains(fx.appdata.to_string_lossy().as_ref()),
+        "依赖仓库不得指向用户 ~/.m2: {repo_flag}"
+    );
+
+    // JAVA_HOME 指向托管 JDK（执行只用托管工具链）。
+    let java_home = env
+        .lines()
+        .find(|l| l.starts_with("JAVA_HOME="))
+        .expect("JAVA_HOME must be injected");
+    assert!(
+        java_home.starts_with(&format!("JAVA_HOME={}", fx.tools.join("jdk").display())),
+        "JAVA_HOME 必须指向托管 JDK: {java_home}"
+    );
+
+    // 打包前后用户 ~/.m2 内容不变。
+    if let Some(m2) = &m2 {
+        let mut after = Vec::new();
+        snapshot(m2, 2, &mut after);
+        let mut b = before.clone();
+        let mut a = after.clone();
+        b.sort();
+        a.sort();
+        assert_eq!(b, a, "用户 ~/.m2 在打包前后必须完全不变（ADR-0001）");
+    }
+}
