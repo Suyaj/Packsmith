@@ -19,6 +19,61 @@ use crate::store::projects::{self, CancelFlag, ProjectError, Project};
 use crate::store::Store;
 
 pub mod commands;
+pub mod exec;
+
+/// 构建执行（ticket 07）错误：稳定 `code` 供前端 i18n。
+#[derive(Debug, thiserror::Error)]
+pub enum BuildError {
+    /// 托管工具链缺 mvnd 或 JDK（ADR-0001：不回退 PATH）。
+    #[error("managed toolchain missing: {0}")]
+    ToolchainMissing(&'static str),
+    /// 构建命令的第一个词不是 mvnd/mvn（v1 仅 Maven）。
+    #[error("unsupported build command: {0}")]
+    UnsupportedBuildCommand(String),
+    /// 构建命令为空、引号未闭合等无法分词。
+    #[error("invalid build command: {0}")]
+    InvalidBuildCommand(String),
+    /// 子进程启动失败。
+    #[error("failed to spawn build process: {0}")]
+    Spawn(String),
+    /// 构建被用户取消（子进程已被杀死）。
+    #[error("build was cancelled")]
+    Cancelled,
+    /// 同一项目已有打包任务进行中。
+    #[error("a build is already running for this project")]
+    AlreadyRunning,
+    /// 构建日志不存在（id 非法或文件已被清理）。
+    #[error("build log not found: {0}")]
+    LogNotFound(String),
+    /// 指定 id 的项目不存在。
+    #[error("project {0} not found")]
+    ProjectNotFound(i64),
+    #[error("store error: {0}")]
+    Store(#[from] crate::store::StoreError),
+    #[error("project error: {0}")]
+    Project(#[from] ProjectError),
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+}
+
+impl BuildError {
+    /// A stable machine-readable tag for the frontend to key i18n on.
+    pub fn code(&self) -> &'static str {
+        match self {
+            BuildError::ToolchainMissing(_) => "toolchain_missing",
+            BuildError::UnsupportedBuildCommand(_) => "unsupported_build_command",
+            BuildError::InvalidBuildCommand(_) => "invalid_build_command",
+            BuildError::Spawn(_) => "spawn_failed",
+            BuildError::Cancelled => "cancelled",
+            BuildError::AlreadyRunning => "already_running",
+            BuildError::LogNotFound(_) => "log_not_found",
+            BuildError::ProjectNotFound(_) => "project_not_found",
+            BuildError::Store(_) => "store",
+            BuildError::Project(_) => "project_not_found",
+            BuildError::Io(_) => "io",
+        }
+    }
+}
 
 /// 打包临时工作区就绪后的信息。
 #[derive(Debug, Clone, Serialize, Deserialize)]
