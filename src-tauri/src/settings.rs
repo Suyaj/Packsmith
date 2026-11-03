@@ -30,14 +30,19 @@ impl CloseWindowBehavior {
     }
 }
 
+/// 非法设置字符串（持久化契约只有 `'minimize' | 'quit'`）。
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("unknown close_window_behavior: {0:?}")]
+pub struct CloseWindowBehaviorParseError(String);
+
 impl std::str::FromStr for CloseWindowBehavior {
-    type Err = String;
+    type Err = CloseWindowBehaviorParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "minimize" => Ok(CloseWindowBehavior::Minimize),
             "quit" => Ok(CloseWindowBehavior::Quit),
-            other => Err(format!("unknown close_window_behavior: {other:?}")),
+            other => Err(CloseWindowBehaviorParseError(other.to_string())),
         }
     }
 }
