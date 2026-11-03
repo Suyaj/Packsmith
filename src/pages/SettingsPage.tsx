@@ -16,6 +16,11 @@ import {
   ToolKind,
   ToolStatus,
 } from "@/lib/toolchain";
+import {
+  fetchCloseWindowBehavior,
+  normalizeCloseWindowBehavior,
+  saveCloseWindowBehavior,
+} from "@/lib/settings";
 
 const TOOL_ORDER: ToolKind[] = ["git", "jdk", "mvnd"];
 
@@ -144,6 +149,98 @@ function ToolRow({
   );
 }
 
+function CloseBehaviorCard() {
+  const { t } = useTranslation();
+  const [behavior, setBehavior] = useState<"minimize" | "quit">("minimize");
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    fetchCloseWindowBehavior()
+      .then((value) => {
+        if (!disposed) setBehavior(normalizeCloseWindowBehavior(value));
+      })
+      .catch((e) => {
+        if (!disposed) setError(String(e));
+      });
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
+  const handleChange = async (value: "minimize" | "quit") => {
+    const previous = behavior;
+    setBehavior(value); // 乐观更新，失败回退
+    setError(null);
+    try {
+      await saveCloseWindowBehavior(value);
+    } catch (e) {
+      setBehavior(previous);
+      setError(String(e));
+    }
+  };
+
+  return (
+    <Card className="mt-4">
+      <CardHeader>
+        <CardTitle>{t("settings.closeBehavior.title")}</CardTitle>
+        <CardDescription>
+          {t("settings.closeBehavior.description")}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <fieldset
+          role="group"
+          aria-label={t("settings.closeBehavior.title")}
+          className="space-y-3"
+        >
+          <label className="flex cursor-pointer items-start gap-3">
+            <input
+              type="radio"
+              name="close-window-behavior"
+              aria-label={t("settings.closeBehavior.minimize")}
+              checked={behavior === "minimize"}
+              onChange={() => void handleChange("minimize")}
+              className="mt-1"
+            />
+            <span>
+              <span className="block text-sm font-medium">
+                {t("settings.closeBehavior.minimize")}
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                {t("settings.closeBehavior.minimizeHint")}
+              </span>
+            </span>
+          </label>
+          <label className="flex cursor-pointer items-start gap-3">
+            <input
+              type="radio"
+              name="close-window-behavior"
+              aria-label={t("settings.closeBehavior.quit")}
+              checked={behavior === "quit"}
+              onChange={() => void handleChange("quit")}
+              className="mt-1"
+            />
+            <span>
+              <span className="block text-sm font-medium">
+                {t("settings.closeBehavior.quit")}
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                {t("settings.closeBehavior.quitHint")}
+              </span>
+            </span>
+          </label>
+        </fieldset>
+        {error && (
+          <p role="alert" className="mt-2 text-xs text-destructive">
+            {t("settings.closeBehavior.saveError", { error })}
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function SettingsPage() {
   const { t } = useTranslation();
   const [rows, setRows] = useState<Rows | null>(null);
@@ -244,6 +341,7 @@ function SettingsPage() {
           )}
         </CardContent>
       </Card>
+      <CloseBehaviorCard />
     </section>
   );
 }

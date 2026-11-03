@@ -113,6 +113,7 @@ describe("设置页：托管工具链", () => {
   it("下载失败显示错误并可重试", async () => {
     mockInvoke.mockImplementation(async (cmd: string) => {
       if (cmd === "toolchain_status") return fixtureStatuses;
+      if (cmd === "get_close_window_behavior") return "minimize";
       throw new Error("网络下载失败：连接超时");
     });
     render(<SettingsPage />);
@@ -151,5 +152,91 @@ describe("设置页：托管工具链", () => {
     await waitFor(() => {
       expect(rowOf("Git")).toHaveTextContent("已托管");
     });
+  });
+});
+
+describe("设置页：关闭窗口行为", () => {
+  it("默认选中最小化到托盘", async () => {
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "toolchain_status") return fixtureStatuses;
+      if (cmd === "get_close_window_behavior") return "minimize";
+      throw new Error(`unexpected command ${cmd}`);
+    });
+    render(<SettingsPage />);
+
+    const section = await screen.findByRole("group", { name: "关闭窗口行为" });
+    expect(
+      within(section).getByRole("radio", { name: "最小化到托盘" }),
+    ).toBeChecked();
+    expect(
+      within(section).getByRole("radio", { name: "退出应用" }),
+    ).not.toBeChecked();
+    // 默认不写库
+    expect(mockInvoke).not.toHaveBeenCalledWith(
+      "set_close_window_behavior",
+      expect.anything(),
+    );
+  });
+
+  it("加载到 quit 时选中退出应用", async () => {
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "toolchain_status") return fixtureStatuses;
+      if (cmd === "get_close_window_behavior") return "quit";
+      throw new Error(`unexpected command ${cmd}`);
+    });
+    render(<SettingsPage />);
+
+    const section = await screen.findByRole("group", { name: "关闭窗口行为" });
+    await waitFor(() => {
+      expect(
+        within(section).getByRole("radio", { name: "退出应用" }),
+      ).toBeChecked();
+    });
+  });
+
+  it("切换选项立即持久化", async () => {
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "toolchain_status") return fixtureStatuses;
+      if (cmd === "get_close_window_behavior") return "minimize";
+      if (cmd === "set_close_window_behavior") return undefined;
+      throw new Error(`unexpected command ${cmd}`);
+    });
+    render(<SettingsPage />);
+
+    const section = await screen.findByRole("group", { name: "关闭窗口行为" });
+    await userEvent.click(
+      within(section).getByRole("radio", { name: "退出应用" }),
+    );
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("set_close_window_behavior", {
+        behavior: "quit",
+      });
+    });
+    expect(
+      within(section).getByRole("radio", { name: "退出应用" }),
+    ).toBeChecked();
+  });
+
+  it("保存失败时回显错误且不静默丢选项", async () => {
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "toolchain_status") return fixtureStatuses;
+      if (cmd === "get_close_window_behavior") return "minimize";
+      if (cmd === "set_close_window_behavior")
+        throw new Error("数据保存失败");
+      throw new Error(`unexpected command ${cmd}`);
+    });
+    render(<SettingsPage />);
+
+    const section = await screen.findByRole("group", { name: "关闭窗口行为" });
+    await userEvent.click(
+      within(section).getByRole("radio", { name: "退出应用" }),
+    );
+
+    expect(await screen.findByText(/数据保存失败/)).toBeInTheDocument();
+    // 保存失败：选项回退到已持久化的值
+    expect(
+      within(section).getByRole("radio", { name: "最小化到托盘" }),
+    ).toBeChecked();
   });
 });
