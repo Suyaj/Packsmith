@@ -81,8 +81,15 @@ pub struct Project {
     /// 上次打包选择的分支（ticket 06）；从未打包过为 `None`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_branch: Option<String>,
+    /// 项目构建命令（ticket 07），随项目可编辑；默认
+    /// [`DEFAULT_BUILD_COMMAND`]（迁移 v6 落库默认值）。
+    #[serde(default)]
+    pub build_command: String,
     pub created_at: String,
 }
+
+/// 新项目的默认构建命令（spec: 默认 `mvnd package -DskipTests`）。
+pub const DEFAULT_BUILD_COMMAND: &str = "mvnd package -DskipTests";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -123,6 +130,9 @@ pub enum ProjectError {
     /// 指定 id 的项目不存在。
     #[error("project {0} not found")]
     ProjectNotFound(i64),
+    /// 构建命令为空或仅空白（ticket 07）。
+    #[error("invalid build command {0:?}")]
+    InvalidBuildCommand(String),
     #[error("store error: {0}")]
     Store(#[from] StoreError),
     #[error("io error: {0}")]
@@ -144,6 +154,7 @@ impl ProjectError {
             ProjectError::Clone(_) => "clone_failed",
             ProjectError::BranchListing(_) => "branch_listing_failed",
             ProjectError::ProjectNotFound(_) => "project_not_found",
+            ProjectError::InvalidBuildCommand(_) => "invalid_build_command",
             ProjectError::Store(_) => "store",
             ProjectError::Io(_) => "io",
         }
@@ -164,6 +175,7 @@ fn row_to_project(row: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
         project_type: ProjectType::from_str(&row.get::<_, String>("project_type")?)
             .expect("project_type is CHECK-constrained to known values"),
         last_branch: row.get("last_branch")?,
+        build_command: row.get("build_command")?,
         created_at: row.get("created_at")?,
     })
 }
@@ -172,7 +184,7 @@ fn row_to_project(row: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
 pub fn list(store: &Store) -> Result<Vec<Project>, ProjectError> {
     let rows = store.with(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT id, name, source, url, path, project_type, last_branch, created_at
+            "SELECT id, name, source, url, path, project_type, last_branch, build_command, created_at
              FROM projects ORDER BY created_at, id",
         )?;
         let rows = stmt
@@ -235,7 +247,7 @@ pub fn get(store: &Store, id: i64) -> Result<Option<Project>, ProjectError> {
     let project = store.with(|conn| {
         Ok(conn
             .query_row(
-                "SELECT id, name, source, url, path, project_type, last_branch, created_at
+                "SELECT id, name, source, url, path, project_type, last_branch, build_command, created_at
                  FROM projects WHERE id = ?1",
                 [id],
                 row_to_project,
@@ -330,7 +342,7 @@ pub fn import(
 
 fn get_in(conn: &rusqlite::Connection, id: i64) -> rusqlite::Result<Option<Project>> {
     conn.query_row(
-        "SELECT id, name, source, url, path, project_type, last_branch, created_at
+        "SELECT id, name, source, url, path, project_type, last_branch, build_command, created_at
          FROM projects WHERE id = ?1",
         [id],
         row_to_project,
@@ -344,6 +356,26 @@ pub fn set_last_branch(store: &Store, project_id: i64, branch: &str) -> Result<(
         conn.execute(
             "UPDATE projects SET last_branch = ?1 WHERE id = ?2",
             rusqlite::params![branch, project_id],
+        )?;
+        Ok(())
+    })?;
+    Ok(())
+}
+
+/// 保存项目构建命令（ticket 07）：随项目可编辑并持久化。空/纯空白拒绝。
+pub fn set_build_command(
+    store: &Store,
+    project_id: i64,
+    command: &str,
+) -> Result<(), ProjectError> {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return Err(ProjectError::InvalidBuildCommand(command.to_string()));
+    }
+    store.with(|conn| {
+        conn.execute(
+            "UPDATE projects SET build_command = ?1 WHERE id = ?2",
+            rusqlite::params![command.trim(), project_id],
         )?;
         Ok(())
     })?;

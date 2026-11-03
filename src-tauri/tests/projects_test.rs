@@ -507,3 +507,54 @@ fn workspace_root_tilde_is_expanded_to_the_home_directory() {
         Path::new("/absolute/path")
     );
 }
+
+// ---------------------------------------------------------------------------
+// Build command persistence (ticket 07)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn new_project_defaults_to_the_standard_build_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = fixture_repo(dir.path(), "cmd-repo");
+    let store = open_store(dir.path());
+
+    projects::import(&store, "cmd-repo", &repo, ProjectType::Maven).unwrap();
+
+    let p = &projects::list(&store).unwrap()[0];
+    assert_eq!(p.build_command, projects::DEFAULT_BUILD_COMMAND);
+    assert_eq!(p.build_command, "mvnd package -DskipTests");
+}
+
+#[test]
+fn build_command_can_be_edited_and_persists_on_the_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = fixture_repo(dir.path(), "edit-cmd-repo");
+    let store = open_store(dir.path());
+
+    let id = projects::import(&store, "edit-cmd-repo", &repo, ProjectType::Maven).unwrap().id;
+
+    projects::set_build_command(&store, id, "mvnd package -DskipTests -Pfast").unwrap();
+
+    let p = projects::get(&store, id).unwrap().unwrap();
+    assert_eq!(p.build_command, "mvnd package -DskipTests -Pfast");
+
+    // Reopening the store keeps the edited command.
+    drop(store);
+    let store = open_store(dir.path());
+    let p = projects::get(&store, id).unwrap().unwrap();
+    assert_eq!(p.build_command, "mvnd package -DskipTests -Pfast");
+}
+
+#[test]
+fn build_command_must_not_be_blank() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = fixture_repo(dir.path(), "blank-cmd-repo");
+    let store = open_store(dir.path());
+
+    let id = projects::import(&store, "blank-cmd-repo", &repo, ProjectType::Maven).unwrap().id;
+
+    assert!(matches!(
+        projects::set_build_command(&store, id, "   "),
+        Err(ProjectError::InvalidBuildCommand(_))
+    ));
+}
