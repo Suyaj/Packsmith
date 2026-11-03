@@ -10,8 +10,8 @@
 //! the `deploy-event` app event (envelope: `{ deployId, event }`).
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -20,9 +20,9 @@ use crate::commands::ApiError;
 use crate::deploy::engine::{self, ConnInfo, DeployEvent, DeployPlan, TargetJob};
 use crate::deploy::transport::SshTransport;
 use crate::server::repo as server_repo;
-use crate::store::history;
-use crate::store::projects::{new_cancel_flag, CancelFlag};
 use crate::store::Store;
+use crate::store::history;
+use crate::store::projects::{CancelFlag, new_cancel_flag};
 use crate::targets::repo as targets_repo;
 
 /// Deploy task registry: ids → cancel flags. Snapshots themselves travel to
@@ -52,7 +52,12 @@ impl DeployRegistry {
     }
 
     fn cancel(&self, id: i64) -> bool {
-        match self.tasks.lock().expect("deploy registry poisoned").get(&id) {
+        match self
+            .tasks
+            .lock()
+            .expect("deploy registry poisoned")
+            .get(&id)
+        {
             Some(flag) => {
                 flag.store(true, Ordering::Relaxed);
                 true
@@ -152,7 +157,10 @@ pub async fn start_deploy(
             .find(|e| e.id == history_id)
             .ok_or(history::HistoryError::NotFound(history_id))?;
         if !entry.success {
-            return Err(ApiError::raw("build_failed", "cannot deploy a failed build"));
+            return Err(ApiError::raw(
+                "build_failed",
+                "cannot deploy a failed build",
+            ));
         }
         let artifacts_dir = entry
             .artifacts_dir

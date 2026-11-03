@@ -37,12 +37,20 @@ pub struct ExecOutput {
 pub enum TransportError {
     /// No stored fingerprint and deploys never accept new keys silently —
     /// the user must run a 连接测试 once and accept the fingerprint.
-    HostKeyUnknown { fingerprint: String },
+    HostKeyUnknown {
+        fingerprint: String,
+    },
     /// The server's key differs from the stored fingerprint (possible MITM).
-    HostKeyChanged { fingerprint: String },
-    Unreachable { detail: String },
+    HostKeyChanged {
+        fingerprint: String,
+    },
+    Unreachable {
+        detail: String,
+    },
     AuthFailed,
-    KeyUnreadable { detail: String },
+    KeyUnreadable {
+        detail: String,
+    },
     /// SFTP / local-file I/O failure during upload.
     Io(String),
     /// The user cancelled; checked via the upload progress callback.
@@ -68,7 +76,10 @@ impl std::fmt::Display for TransportError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TransportError::HostKeyUnknown { fingerprint } => {
-                write!(f, "unknown host key ({fingerprint}); accept it via a connection test first")
+                write!(
+                    f,
+                    "unknown host key ({fingerprint}); accept it via a connection test first"
+                )
             }
             TransportError::HostKeyChanged { fingerprint } => {
                 write!(f, "host key changed ({fingerprint}); possible MITM")
@@ -177,17 +188,34 @@ pub struct DeploySummary {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DeployEvent {
-    Started { target_ids: Vec<i64> },
-    Phase { target_id: i64, phase: &'static str, status: &'static str },
-    UploadProgress { target_id: i64, transferred: u64, total: u64 },
-    Output { target_id: i64, phase: &'static str, output: String, exit_code: i32 },
+    Started {
+        target_ids: Vec<i64>,
+    },
+    Phase {
+        target_id: i64,
+        phase: &'static str,
+        status: &'static str,
+    },
+    UploadProgress {
+        target_id: i64,
+        transferred: u64,
+        total: u64,
+    },
+    Output {
+        target_id: i64,
+        phase: &'static str,
+        output: String,
+        exit_code: i32,
+    },
     TargetFinished {
         target_id: i64,
         status: &'static str,
         stop_failed: bool,
         error: Option<String>,
     },
-    Finished { cancelled: bool },
+    Finished {
+        cancelled: bool,
+    },
 }
 
 /// The SSH/SFTP seam: one connected transport per target (one target = one
@@ -432,7 +460,10 @@ where
     }
 
     sink(DeployEvent::Finished { cancelled });
-    DeploySummary { cancelled, targets: outcomes }
+    DeploySummary {
+        cancelled,
+        targets: outcomes,
+    }
 }
 
 fn finish(sink: &mut impl FnMut(DeployEvent), outcome: &TargetOutcome) {

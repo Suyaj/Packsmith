@@ -7,6 +7,10 @@ import { resources } from "@/i18n";
 import "@/i18n";
 
 // 页面骨架测试不触达后端 IPC；数据流在各自页面的测试里 mock。
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(async () => () => {}),
+}));
+
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (cmd: string) => {
     if (cmd === "list_projects") return [];

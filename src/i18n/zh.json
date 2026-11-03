@@ -32,7 +32,8 @@
     "delete": "删除",
     "confirmDelete": "确定删除该构建记录吗？其构件与构建日志将一并删除。",
     "cleanup": "清理该项目历史",
-    "confirmCleanup": "确定清理该项目的全部构建历史与构件吗？"
+    "confirmCleanup": "确定清理该项目的全部构建历史与构件吗？",
+    "deploy": "部署"
   },
   "projects": {
     "title": "项目管理",
@@ -189,8 +190,10 @@
       "missing_server": "所选服务器不存在，请重新选择",
       "duplicate_binding": "该项目已绑定此服务器",
       "store": "数据保存失败",
-      "unknown": "操作失败：{{message}}"
-    }
+      "unknown": "操作失败：{{message}}",
+      "invalid_target": "部署目标不存在或不属于该项目"
+    },
+    "autoDeploy": "构建成功后自动连锁部署"
   },
   "settings": {
     "title": "设置",
@@ -237,5 +240,40 @@
       "quitHint": "关闭窗口时直接退出 Packsmith",
       "saveError": "保存失败：{{error}}"
     }
+  },
+  "deploy": {
+    "title": "部署 — {{project}}",
+    "artifactTitle": "选择构件",
+    "targetTitle": "选择部署目标（可多选）",
+    "targetLabel": "部署目标 #{{id}}",
+    "noTargets": "该项目还没有部署目标，请先在项目页配置",
+    "noArtifacts": "该构建没有入库构件",
+    "submit": "部署",
+    "cancel": "取消部署",
+    "close": "关闭",
+    "loadFailed": "加载部署信息失败：{{detail}}",
+    "deployFailed": "发起部署失败：{{detail}}",
+    "uploadProgress": "上传中 {{transferred}}/{{total}} 字节",
+    "status": {
+      "pending": "等待",
+      "uploading": "上传中",
+      "stopping": "停止服务中",
+      "starting": "启动服务中",
+      "success": "部署成功",
+      "failed": "部署失败",
+      "cancelled": "已取消"
+    },
+    "phases": {
+      "upload": "上传",
+      "stop": "停止",
+      "start": "启动"
+    },
+    "stopFailedNotice": "停止命令组失败，已中止重启。请检查停止阶段输出，处理后可单独执行启动命令组。",
+    "manualStart": "单独执行启动命令组",
+    "autoDeployHint": "构建成功后自动连锁部署到该目标",
+    "autoRunning": "准备中…",
+    "autoRunningTitle": "自动连锁部署进行中（{{summary}}）",
+    "autoFinished": "自动连锁部署完成（{{summary}}）",
+    "autoDismiss": "知道了"
   }
 }

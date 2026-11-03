@@ -13,8 +13,7 @@
 use packsmith_lib::store::Store;
 use packsmith_lib::targets::repo::{self, NewTarget, Target};
 
-const TEST_KEY_HEX: &str =
-    "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
+const TEST_KEY_HEX: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
 
 fn open_store() -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
@@ -45,7 +44,11 @@ fn seed_project(store: &Store, name: &str) -> i64 {
             conn.execute(
                 "INSERT INTO projects (name, source, url, path, project_type)
                  VALUES (?1, 'git', ?2, ?3, 'maven')",
-                rusqlite::params![name, format!("https://example.com/{name}.git"), format!("/tmp/{name}")],
+                rusqlite::params![
+                    name,
+                    format!("https://example.com/{name}.git"),
+                    format!("/tmp/{name}")
+                ],
             )?;
             Ok(conn.last_insert_rowid())
         })
@@ -76,7 +79,10 @@ fn migration_creates_deployment_targets_table() {
             )
         })
         .unwrap();
-    assert_eq!(count, 1, "migration must create the deployment_targets table");
+    assert_eq!(
+        count, 1,
+        "migration must create the deployment_targets table"
+    );
 }
 
 #[test]
@@ -160,7 +166,11 @@ fn one_project_can_bind_multiple_servers_and_a_server_multiple_projects() {
     assert_eq!(a_server_ids, vec![server_1, server_2], "oldest first");
 
     let for_b = repo::list_for_project(&store, project_b).unwrap();
-    assert_eq!(for_b.len(), 1, "one server may be bound by several projects");
+    assert_eq!(
+        for_b.len(),
+        1,
+        "one server may be bound by several projects"
+    );
     assert_eq!(for_b[0].server_id, server_1);
 }
 
@@ -382,7 +392,9 @@ fn get_returns_one_target_by_id_across_projects() {
     let project_a = seed_project(&store, "app-a");
     let server = seed_server(&store, "web-1");
     let created = repo::create(&store, &new_target(project_a, server)).unwrap();
-    let fetched = repo::get(&store, created.id).unwrap().expect("target exists");
+    let fetched = repo::get(&store, created.id)
+        .unwrap()
+        .expect("target exists");
     assert_eq!(fetched.project_id, project_a);
     assert!(repo::get(&store, 999).unwrap().is_none());
 }

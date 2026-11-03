@@ -5,7 +5,7 @@
 //! each line trimmed, blank lines dropped, order preserved (see
 //! [`split_commands`]).
 
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{OptionalExtension, params};
 
 use crate::store::Store;
 
@@ -65,17 +65,16 @@ fn row_to_target(row: &rusqlite::Row<'_>) -> rusqlite::Result<Target> {
 
 /// Lists every deployment target bound to `project_id`, oldest first.
 pub fn list_for_project(store: &Store, project_id: i64) -> Result<Vec<Target>, RepoError> {
-    Ok(store
-        .with(|conn| {
-            let mut stmt = conn.prepare(&format!(
-                "SELECT {SELECT_COLUMNS} FROM deployment_targets
+    Ok(store.with(|conn| {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {SELECT_COLUMNS} FROM deployment_targets
                  WHERE project_id = ?1 ORDER BY id"
-            ))?;
-            let rows = stmt
-                .query_map([project_id], row_to_target)?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(rows)
-        })?)
+        ))?;
+        let rows = stmt
+            .query_map([project_id], row_to_target)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    })?)
 }
 
 /// Inserts a deployment target and returns the persisted record.
@@ -155,9 +154,8 @@ pub fn update(store: &Store, target: &Target) -> Result<Target, RepoError> {
 
 /// Deletes a deployment target. Returns whether a row was actually removed.
 pub fn delete(store: &Store, id: i64) -> Result<bool, RepoError> {
-    let changed = store.with(|conn| {
-        conn.execute("DELETE FROM deployment_targets WHERE id = ?1", params![id])
-    })?;
+    let changed = store
+        .with(|conn| conn.execute("DELETE FROM deployment_targets WHERE id = ?1", params![id]))?;
     Ok(changed > 0)
 }
 
@@ -265,14 +263,14 @@ fn binding_exists(
 fn check_references(store: &Store, project_id: i64, server_id: i64) -> Result<(), RepoError> {
     let (project_exists, server_exists) = store.with(|conn| {
         let project = conn
-            .query_row(
-                "SELECT 1 FROM projects WHERE id = ?1",
-                [project_id],
-                |_| Ok(()),
-            )
+            .query_row("SELECT 1 FROM projects WHERE id = ?1", [project_id], |_| {
+                Ok(())
+            })
             .optional()?;
         let server = conn
-            .query_row("SELECT 1 FROM servers WHERE id = ?1", [server_id], |_| Ok(()))
+            .query_row("SELECT 1 FROM servers WHERE id = ?1", [server_id], |_| {
+                Ok(())
+            })
             .optional()?;
         Ok((project.is_some(), server.is_some()))
     })?;

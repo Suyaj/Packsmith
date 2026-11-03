@@ -42,6 +42,7 @@ const target: Target = {
   uploadDir: "/home/app",
   startCommands: "cd /home/app\nsh start.sh start",
   stopCommands: "sh start.sh stop",
+  autoDeploy: false,
 };
 
 function mockBackend(overrides: Record<string, unknown> = {}) {
@@ -224,5 +225,37 @@ describe("部署目标面板", () => {
     });
     expect(confirmSpy).toHaveBeenCalledWith("确定删除该部署目标吗？");
     confirmSpy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 构建成功后自动连锁部署开关（ticket 10，默认关）
+// ---------------------------------------------------------------------------
+
+describe("部署目标自动连锁开关", () => {
+  it("默认关闭，可打开并发送 set_target_auto_deploy", async () => {
+    mockBackend();
+
+    render(<DeploymentTargetsPanel projectId={5} projectName="demo-app" />);
+
+    const toggle = await screen.findByTestId("auto-deploy-toggle-1");
+    expect(toggle).not.toBeChecked();
+
+    await userEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(expectInvoke("set_target_auto_deploy")).toEqual({
+        id: 1,
+        enabled: true,
+      });
+    });
+  });
+
+  it("已开启的目标回显为选中", async () => {
+    mockBackend({ targets: [{ ...target, autoDeploy: true }] });
+
+    render(<DeploymentTargetsPanel projectId={5} projectName="demo-app" />);
+
+    expect(await screen.findByTestId("auto-deploy-toggle-1")).toBeChecked();
   });
 });

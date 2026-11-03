@@ -340,7 +340,12 @@ async fn multiple_targets_deploy_sequentially_in_order() {
     )
     .await;
 
-    assert!(summary.targets.iter().all(|o| o.status.as_str() == "success"));
+    assert!(
+        summary
+            .targets
+            .iter()
+            .all(|o| o.status.as_str() == "success")
+    );
     let map = mocks.lock().unwrap();
     assert_eq!(map.get(&1).unwrap().execs.lock().unwrap().len(), 2);
     assert_eq!(map.get(&2).unwrap().execs.lock().unwrap().len(), 2);
@@ -371,7 +376,15 @@ async fn one_targets_failure_does_not_stop_the_next_target() {
     assert_eq!(summary.targets[1].status.as_str(), "success");
     // Target 2 saw all its phases.
     assert_eq!(
-        mocks.lock().unwrap().get(&2).unwrap().execs.lock().unwrap().len(),
+        mocks
+            .lock()
+            .unwrap()
+            .get(&2)
+            .unwrap()
+            .execs
+            .lock()
+            .unwrap()
+            .len(),
         2
     );
 }
@@ -395,7 +408,10 @@ async fn connection_failure_fails_only_that_target() {
     assert!(summary.targets[0].error.is_some());
     assert_eq!(summary.targets[1].status.as_str(), "success");
     let map = mocks.lock().unwrap();
-    assert!(!map.contains_key(&1), "failed connect must not record calls");
+    assert!(
+        !map.contains_key(&1),
+        "failed connect must not record calls"
+    );
     assert!(map.contains_key(&2));
 }
 
@@ -412,7 +428,11 @@ async fn upload_failure_fails_target_before_any_command_group() {
             }))
         };
         super::run_deploy(
-            plan(Some(artifact(&path)), true, vec![job(1, "/a", "sh stop", "sh start")]),
+            plan(
+                Some(artifact(&path)),
+                true,
+                vec![job(1, "/a", "sh stop", "sh start")],
+            ),
             factory,
             new_cancel_flag(),
             |_| {},
@@ -508,7 +528,11 @@ async fn run_stop_false_skips_stop_but_runs_start_after_upload() {
     let (_dir, path) = tmp_artifact("a.jar", b"x");
     let (factory, mocks) = make_factory(vec![], vec![]);
     let summary = run(
-        plan(Some(artifact(&path)), false, vec![job(1, "/a", "sh stop", "sh start")]),
+        plan(
+            Some(artifact(&path)),
+            false,
+            vec![job(1, "/a", "sh stop", "sh start")],
+        ),
         factory,
     )
     .await;
@@ -534,7 +558,15 @@ async fn empty_command_groups_are_no_op_success() {
     assert!(summary.targets[0].stop.is_none());
     assert!(summary.targets[0].start.is_none());
     assert_eq!(
-        mocks.lock().unwrap().get(&1).unwrap().execs.lock().unwrap().len(),
+        mocks
+            .lock()
+            .unwrap()
+            .get(&1)
+            .unwrap()
+            .execs
+            .lock()
+            .unwrap()
+            .len(),
         0
     );
 }
@@ -565,7 +597,10 @@ async fn events_report_phase_and_output_snapshots() {
         .iter()
         .filter_map(|e| match e {
             DeployEvent::Phase {
-                target_id, phase, status, ..
+                target_id,
+                phase,
+                status,
+                ..
             } => Some((*target_id, *phase, *status)),
             _ => None,
         })
@@ -578,7 +613,11 @@ async fn events_report_phase_and_output_snapshots() {
             (7, "start", "running"),
         ]
     );
-    assert_eq!(events.of_kind("output").len(), 3, "each phase leaves an output snapshot");
+    assert_eq!(
+        events.of_kind("output").len(),
+        3,
+        "each phase leaves an output snapshot"
+    );
     assert_eq!(events.of_kind("finished").len(), 1);
 }
 
