@@ -20,7 +20,7 @@ const servers: Server[] = [
     host: "web-1.example.com",
     port: 22,
     username: "deploy",
-    credential: { type: "password", password: "s3cret" },
+    credential: { type: "password" },
   },
   {
     id: 12,
@@ -30,7 +30,7 @@ const servers: Server[] = [
     credential: {
       type: "private_key",
       path: "/home/root/.ssh/id_ed25519",
-      passphrase: null,
+      has_passphrase: false,
     },
   },
 ];

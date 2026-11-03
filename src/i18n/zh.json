@@ -162,6 +162,9 @@
     "password": "密码",
     "privateKeyPath": "私钥路径",
     "privateKeyPassphrase": "私钥口令（可选）",
+    "keepUnchanged": "留空保持不变",
+    "credentialSetPassword": "已设置密码",
+    "credentialSetPassphrase": "已设置私钥口令",
     "result": {
       "success": "连接成功",
       "authFailedPassword": "认证失败：密码被服务器拒绝",

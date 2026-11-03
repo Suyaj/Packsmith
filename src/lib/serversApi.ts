@@ -4,16 +4,20 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
-export type Credential =
-  | { type: "private_key"; path: string; passphrase: string | null }
-  | { type: "password"; password: string };
+/**
+ * 保存服务器返回的凭据摘要：只含类型与"是否已设置"指示，永不含明文
+ * 密码 / 口令（后端凭据不回传，编辑留空即保持现状）。私钥路径不是机密。
+ */
+export type StoredCredential =
+  | { type: "private_key"; path: string; has_passphrase: boolean }
+  | { type: "password" };
 
 export type Server = {
   id: number;
   host: string;
   port: number;
   username: string;
-  credential: Credential;
+  credential: StoredCredential;
 };
 
 export type TestOutcome =
@@ -24,11 +28,26 @@ export type TestOutcome =
   | { status: "auth_failed"; method: "password" | "private_key" }
   | { status: "key_unreadable"; detail: string };
 
+/**
+ * 凭据入参。私钥口令可选字段是三态：
+ * - 缺省（undefined）→ 保持现有口令（编辑留空）；
+ * - null → 无口令 / 清除口令；
+ * - 字符串 → 设置口令。
+ */
+export type CredentialInput =
+  | { type: "private_key"; path: string; passphrase?: string | null }
+  | { type: "password"; password: string };
+
 export type ServerInput = {
   host: string;
   port: number;
   username: string;
-  credential: Credential;
+  credential: CredentialInput;
+};
+
+/** 更新入参：credential 为 null = 保持现有凭据不变（密码留空）。 */
+export type ServerUpdateInput = Omit<ServerInput, "credential"> & {
+  credential: CredentialInput | null;
 };
 
 export function listServers(): Promise<Server[]> {
@@ -44,7 +63,7 @@ export function createServer(input: ServerInput): Promise<Server> {
   });
 }
 
-export function updateServer(id: number, input: ServerInput): Promise<Server> {
+export function updateServer(id: number, input: ServerUpdateInput): Promise<Server> {
   return invoke("update_server", {
     id,
     host: input.host,
@@ -73,6 +92,14 @@ export function testServerConnection(
 
 export function acceptHostKey(host: string, port: number, fingerprint: string): Promise<void> {
   return invoke("accept_host_key", { host, port, fingerprint });
+}
+
+/** 对已保存服务器做连接测试：用后端存储的凭据，凭据不出后端。 */
+export function testSavedServerConnection(
+  id: number,
+  acceptUnknownHostKey: boolean,
+): Promise<TestOutcome> {
+  return invoke("test_saved_server_connection", { id, acceptUnknownHostKey });
 }
 
 // ---------------------------------------------------------------------------
