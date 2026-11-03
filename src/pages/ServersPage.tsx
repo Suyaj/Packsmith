@@ -109,7 +109,9 @@ function ServersPage() {
   const refresh = useCallback(async () => {
     try {
       const list = await listServers();
-      setServers(list);
+      // Outside a real Tauri runtime (tests, plain browser) invoke resolves
+      // null instead of rejecting — treat that as "no servers".
+      setServers(Array.isArray(list) ? list : []);
       setLoadError(null);
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e));

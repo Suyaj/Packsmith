@@ -1,5 +1,6 @@
 use tauri::Manager;
 
+pub mod commands;
 pub mod server;
 pub mod store;
 
@@ -7,7 +8,12 @@ pub mod store;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .manage(commands::CloneRegistry::default())
         .invoke_handler(tauri::generate_handler![
+            commands::list_projects,
+            commands::clone_project,
+            commands::import_project,
+            commands::cancel_clone,
             server::commands::list_servers,
             server::commands::create_server,
             server::commands::update_server,

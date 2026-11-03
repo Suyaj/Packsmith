@@ -40,6 +40,20 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
             PRIMARY KEY (host, port)
         );",
     },
+    Migration {
+        version: 3,
+        name: "项目: projects table",
+        sql: "CREATE TABLE projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            source TEXT NOT NULL CHECK (source IN ('git', 'local')),
+            url TEXT,
+            path TEXT NOT NULL,
+            project_type TEXT NOT NULL DEFAULT 'maven'
+                CHECK (project_type IN ('maven', 'gradle')),
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        );",
+    },
 ];
 
 pub(crate) const LATEST_SCHEMA_VERSION: i32 = MIGRATIONS[MIGRATIONS.len() - 1].version;
