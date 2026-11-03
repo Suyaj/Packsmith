@@ -58,12 +58,20 @@
       "loadingBranches": "正在获取分支列表…",
       "noBranches": "远程仓库没有可用分支",
       "start": "开始打包",
-      "starting": "正在准备打包工作区…",
-      "startingProgress": "正在准备打包工作区… {{received}}/{{total}}",
       "cancelWork": "取消打包",
       "close": "关闭",
-      "ready": "临时工作区已就绪",
-      "readyPath": "代码已克隆到：{{path}}"
+      "buildCommand": "构建命令",
+      "buildCommandHint": "执行时自动使用托管 mvnd 与独立依赖仓库",
+      "saveCommand": "保存命令",
+      "commandSaved": "构建命令已保存",
+      "cloning": "正在准备打包工作区…",
+      "cloningProgress": "正在准备打包工作区… {{received}}/{{total}}",
+      "building": "正在构建…",
+      "buildSuccess": "构建成功",
+      "buildFailed": "构建失败（退出码 {{code}}）",
+      "buildCancelled": "打包已取消",
+      "viewLog": "查看完整日志",
+      "logTitle": "构建日志"
     },
     "errors": {
       "duplicate_name": "已存在同名项目",
@@ -79,7 +87,14 @@
       "cancelled": "克隆已取消",
       "store": "数据保存失败",
       "io": "读写磁盘失败：{{message}}",
-      "unknown": "操作失败：{{message}}"
+      "unknown": "操作失败：{{message}}",
+      "toolchain_missing": "托管工具链缺失：请先在设置页下载托管（{{message}}）",
+      "unsupported_build_command": "构建命令不支持：仅支持 mvnd 开头的 Maven 命令（{{message}}）",
+      "invalid_build_command": "构建命令无效：不能为空或引号未闭合（{{message}}）",
+      "already_running": "该项目已有打包任务进行中",
+      "spawn_failed": "构建进程启动失败：{{message}}",
+      "log_not_found": "构建日志不存在：{{message}}",
+      "internal": "内部错误：{{message}}"
     }
   },
   "servers": {

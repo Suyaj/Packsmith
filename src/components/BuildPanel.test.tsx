@@ -23,8 +23,23 @@ const gitProject: Project = {
   url: "https://example.com/demo-app.git",
   path: "/Users/demo/Packsmith/workspace/demo-app",
   project_type: "maven",
+  build_command: "mvnd package -DskipTests",
   last_branch: "develop",
   created_at: "2026-11-02T00:00:00.000Z",
+};
+
+const outcomeOk = {
+  success: true,
+  exit_code: 0,
+  build_id: "build-7-1000",
+  log_path: "/appdata/build-logs/build-7-1000.log",
+};
+
+const outcomeFailed = {
+  success: false,
+  exit_code: 1,
+  build_id: "build-7-1001",
+  log_path: "/appdata/build-logs/build-7-1001.log",
 };
 
 function renderPanel(project: Project = gitProject, onClose = () => {}) {
@@ -40,11 +55,26 @@ function mockBackend(map: Record<string, (args: unknown) => unknown>) {
   });
 }
 
+/** Resolves the branch dropdown to a usable state. */
+async function openPanelWithBranches(
+  map: Record<string, (args: unknown) => unknown>,
+  project: Project = gitProject,
+) {
+  mockBackend({ list_remote_branches: () => ["main", "develop"], ...map });
+  renderPanel(project);
+  const select = (await screen.findByLabelText("打包分支")) as HTMLSelectElement;
+  await waitFor(() => expect(select.value).toBe("develop"));
+  return select;
+}
+
 beforeEach(() => {
   mockInvoke.mockReset();
+  vi.mocked(Channel).mockImplementation(function (this: unknown) {
+    return { onmessage: null };
+  });
 });
 
-describe("打包面板（分支选择与临时工作区）", () => {
+describe("打包面板（分支选择）", () => {
   it("打开后实时拉取分支列表，并默认选中该项目上次使用的分支", async () => {
     mockBackend({ list_remote_branches: () => ["main", "develop", "feature/x"] });
 
@@ -57,7 +87,6 @@ describe("打包面板（分支选择与临时工作区）", () => {
     await waitFor(() => {
       expect(select.value).toBe("develop");
     });
-    // 下拉里是实时拉取的远程分支
     const options = [...select.options].map((o) => o.value);
     expect(options).toEqual(["main", "develop", "feature/x"]);
   });
@@ -72,13 +101,57 @@ describe("打包面板（分支选择与临时工作区）", () => {
       expect(select.value).toBe("main");
     });
   });
+});
 
-  it("确认后按所选分支调用 start_build_workspace 并展示克隆进度", async () => {
+describe("打包面板（构建命令编辑）", () => {
+  it("展示项目当前构建命令，可编辑并保存到后端", async () => {
+    await openPanelWithBranches({
+      update_build_command: (args) => {
+        expect(args).toMatchObject({
+          projectId: 7,
+          command: "mvnd package -DskipTests -Pfast",
+        });
+        return { ...gitProject, build_command: "mvnd package -DskipTests -Pfast" };
+      },
+    });
+
+    const input = screen.getByLabelText("构建命令") as HTMLInputElement;
+    expect(input.value).toBe("mvnd package -DskipTests");
+    await userEvent.clear(input);
+    await userEvent.type(input, "mvnd package -DskipTests -Pfast");
+    await userEvent.click(screen.getByRole("button", { name: "保存命令" }));
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("update_build_command", {
+        projectId: 7,
+        command: "mvnd package -DskipTests -Pfast",
+      });
+    });
+    expect(await screen.findByText("构建命令已保存")).toBeInTheDocument();
+  });
+
+  it("保存非法构建命令时展示后端错误", async () => {
+    await openPanelWithBranches({
+      update_build_command: () => {
+        throw { code: "unsupported_build_command", message: "unsupported build command: gradle" };
+      },
+    });
+
+    const input = screen.getByLabelText("构建命令") as HTMLInputElement;
+    await userEvent.clear(input);
+    await userEvent.type(input, "gradle build");
+    await userEvent.click(screen.getByRole("button", { name: "保存命令" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("仅支持 mvnd");
+  });
+});
+
+describe("打包面板（构建执行）", () => {
+  it("开始打包后调用 start_build，克隆与构建阶段状态实时可见", async () => {
     let captured: { onmessage?: (msg: unknown) => void } = {};
-    mockBackend({
-      list_remote_branches: () => ["main", "develop"],
-      // start_build_workspace stays pending like a real clone
-      start_build_workspace: () => new Promise(() => {}),
+    await openPanelWithBranches({
+      // start_build stays pending like a real build
+      start_build: () => new Promise(() => {}),
     });
     vi.mocked(Channel).mockImplementation(function (this: unknown) {
       const ch: { onmessage?: (msg: unknown) => void } = {};
@@ -86,84 +159,83 @@ describe("打包面板（分支选择与临时工作区）", () => {
       return ch as never;
     });
 
-    renderPanel();
-
-    const select = (await screen.findByLabelText("打包分支")) as HTMLSelectElement;
-    await waitFor(() => expect(select.value).toBe("develop"));
     await userEvent.click(screen.getByRole("button", { name: "开始打包" }));
 
     await waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith("start_build_workspace", {
+      expect(mockInvoke).toHaveBeenCalledWith("start_build", {
         projectId: 7,
         branch: "develop",
-        onProgress: expect.anything(),
+        onEvent: expect.anything(),
       });
     });
-    expect(await screen.findByText(/正在准备/)).toBeInTheDocument();
 
-    captured.onmessage?.({ stage: "transferring", received: 3, total: 10 });
+    // 克隆进度事件
+    captured.onmessage?.({ type: "clone", stage: "transferring", received: 3, total: 10 });
     expect(await screen.findByText(/3\s*\/\s*10/)).toBeInTheDocument();
+
+    // 构建阶段：实时日志行
+    captured.onmessage?.({ type: "log", line: "[INFO] Scanning for projects..." });
+    expect(await screen.findByText(/Scanning for projects/)).toBeInTheDocument();
+    expect(await screen.findByText("正在构建…")).toBeInTheDocument();
   });
 
-  it("克隆成功后展示临时工作区就绪与路径", async () => {
-    mockBackend({
-      list_remote_branches: () => ["main"],
-      start_build_workspace: () => ({ path: "/tmp/packsmith-build-demo-app-1" }),
-    });
+  it("构建成功展示成功状态", async () => {
+    await openPanelWithBranches({ start_build: () => outcomeOk });
 
-    renderPanel({ ...gitProject, last_branch: undefined });
-
-    const select = (await screen.findByLabelText("打包分支")) as HTMLSelectElement;
-    await waitFor(() => expect(select.value).toBe("main"));
     await userEvent.click(screen.getByRole("button", { name: "开始打包" }));
 
-    expect(await screen.findByText("临时工作区已就绪")).toBeInTheDocument();
-    expect(screen.getByText(/packsmith-build-demo-app-1/)).toBeInTheDocument();
+    expect(await screen.findByText("构建成功")).toBeInTheDocument();
+    expect(screen.queryByText("正在构建…")).not.toBeInTheDocument();
   });
 
-  it("克隆失败（如无效分支）展示明确错误", async () => {
-    mockBackend({
-      list_remote_branches: () => ["main"],
-      start_build_workspace: () => {
+  it("构建失败展示失败状态，并可通过按钮读取持久化日志", async () => {
+    await openPanelWithBranches({
+      start_build: () => outcomeFailed,
+      read_build_log: (args) => {
+        expect(args).toMatchObject({ buildId: "build-7-1001" });
+        return "[INFO] ... \n[ERROR] BUILD FAILURE";
+      },
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "开始打包" }));
+
+    expect(await screen.findByText(/构建失败/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "查看完整日志" }));
+
+    expect(await screen.findByText(/BUILD FAILURE/)).toBeInTheDocument();
+  });
+
+  it("构建失败（start_build 报错，如克隆失败）展示明确错误", async () => {
+    await openPanelWithBranches({
+      start_build: () => {
         throw { code: "clone_failed", message: "reference 'refs/heads/nope' not found" };
       },
     });
 
-    renderPanel({ ...gitProject, last_branch: undefined });
-
-    const select = (await screen.findByLabelText("打包分支")) as HTMLSelectElement;
-    await waitFor(() => expect(select.value).toBe("main"));
     await userEvent.click(screen.getByRole("button", { name: "开始打包" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("克隆失败");
-    expect(screen.queryByText("临时工作区已就绪")).not.toBeInTheDocument();
   });
 
-  it("分支列表拉取失败展示错误", async () => {
-    mockBackend({
-      list_remote_branches: () => {
-        throw { code: "branch_listing_failed", message: "connection refused" };
+  it("工具链缺失时报错并提示先托管下载", async () => {
+    await openPanelWithBranches({
+      start_build: () => {
+        throw { code: "toolchain_missing", message: "managed toolchain missing: mvnd" };
       },
     });
 
-    renderPanel();
+    await userEvent.click(screen.getByRole("button", { name: "开始打包" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("获取分支列表失败");
+    expect(await screen.findByRole("alert")).toHaveTextContent("托管工具链缺失");
   });
 
-  it("准备进行中可取消打包，向后端发送 cancel_build_workspace", async () => {
-    mockBackend({
-      list_remote_branches: () => ["main"],
-      start_build_workspace: () => new Promise(() => {}),
+  it("打包进行中可取消，向后端发送 cancel_build_workspace", async () => {
+    await openPanelWithBranches({
+      start_build: () => new Promise(() => {}),
       cancel_build_workspace: () => null,
     });
 
-    renderPanel({ ...gitProject, last_branch: undefined });
-
-    const select = (await screen.findByLabelText("打包分支")) as HTMLSelectElement;
-    await waitFor(() => expect(select.value).toBe("main"));
     await userEvent.click(screen.getByRole("button", { name: "开始打包" }));
-
     await userEvent.click(await screen.findByRole("button", { name: "取消打包" }));
 
     await waitFor(() => {

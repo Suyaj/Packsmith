@@ -6,8 +6,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   cancelBuildWorkspace,
   listRemoteBranches,
-  startBuildWorkspace,
-  type BuildProgress,
+  readBuildLog,
+  startBuild,
+  updateBuildCommand,
+  type BuildEvent,
+  type BuildOutcome,
   type Project,
 } from "@/lib/buildApi";
 
@@ -17,10 +20,14 @@ function isBackendError(e: unknown): e is BackendError {
   return typeof e === "object" && e !== null && "code" in e;
 }
 
+/** 实时日志视图保留的最多行数（避免超长构建撑爆 DOM）。 */
+const MAX_LOG_LINES = 500;
+
 /**
- * 打包面板（ticket 06）：打开时实时拉取分支列表（默认选中上次使用的分支），
- * 确认后创建 Packsmith 临时工作区并 clone 所选分支。构建执行属于 ticket 07，
- * 本面板结束时只是"代码在临时工作区就绪"。
+ * 打包面板（ticket 06/07）：打开时实时拉取分支列表（默认选中上次使用的
+ * 分支），构建命令随项目可编辑；确认后走完整打包流程——创建临时工作区并
+ * clone 所选分支，再用托管工具链执行构建命令，结束后临时工作区自动清理，
+ * 构建日志实时展示并持久化（失败后仍可读取）。
  */
 function BuildPanel({ project, onClose }: { project: Project; onClose: () => void }) {
   const { t } = useTranslation();
@@ -28,9 +35,15 @@ function BuildPanel({ project, onClose }: { project: Project; onClose: () => voi
   const [branch, setBranch] = useState("");
   const [branchError, setBranchError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [progress, setProgress] = useState<BuildProgress | null>(null);
-  const [readyPath, setReadyPath] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [cloneProgress, setCloneProgress] = useState<Extract<BuildEvent, { type: "clone" }> | null>(
+    null,
+  );
+  const [logLines, setLogLines] = useState<string[]>([]);
+  const [outcome, setOutcome] = useState<BuildOutcome | null>(null);
+  const [fullLog, setFullLog] = useState<string | null>(null);
+  const [buildCommand, setBuildCommand] = useState(project.build_command);
+  const [commandSaved, setCommandSaved] = useState(false);
 
   // 打开面板即实时拉取分支列表（远程新建分支可见）。
   useEffect(() => {
@@ -58,7 +71,15 @@ function BuildPanel({ project, onClose }: { project: Project; onClose: () => voi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id, t]);
 
-  /** 准备进行中：取消按钮改为请求后端取消当前任务。 */
+  function handleEvent(msg: BuildEvent) {
+    if (msg.type === "clone") {
+      setCloneProgress(msg);
+    } else {
+      setLogLines((prev) => [...prev, msg.line].slice(-MAX_LOG_LINES));
+    }
+  }
+
+  /** 打包进行中：取消按钮改为请求后端取消当前任务（克隆中断/子进程被杀）。 */
   async function handleCancel() {
     if (busy) {
       await cancelBuildWorkspace(project.id).catch(() => {});
@@ -69,21 +90,47 @@ function BuildPanel({ project, onClose }: { project: Project; onClose: () => voi
 
   async function handleStart() {
     setError(null);
-    setReadyPath(null);
+    setOutcome(null);
+    setFullLog(null);
+    setLogLines([]);
+    setCloneProgress(null);
     setBusy(true);
-    setProgress(null);
     try {
-      const onProgress = new Channel<BuildProgress>();
-      onProgress.onmessage = (msg) => setProgress(msg);
-      const ws = await startBuildWorkspace(project.id, branch, onProgress);
-      setReadyPath(ws.path);
+      const onEvent = new Channel<BuildEvent>();
+      onEvent.onmessage = handleEvent;
+      const result = await startBuild(project.id, branch, onEvent);
+      setOutcome(result);
     } catch (err) {
       const code = isBackendError(err) ? err.code : "unknown";
       const message = isBackendError(err) ? err.message : String(err);
       setError(t(`projects.errors.${code}`, { message }));
     } finally {
       setBusy(false);
-      setProgress(null);
+    }
+  }
+
+  async function handleSaveCommand() {
+    setError(null);
+    setCommandSaved(false);
+    try {
+      const updated = await updateBuildCommand(project.id, buildCommand.trim());
+      setBuildCommand(updated.build_command);
+      setCommandSaved(true);
+    } catch (err) {
+      const code = isBackendError(err) ? err.code : "unknown";
+      const message = isBackendError(err) ? err.message : String(err);
+      setError(t(`projects.errors.${code}`, { message }));
+    }
+  }
+
+  async function handleViewLog() {
+    if (!outcome) return;
+    try {
+      setFullLog(await readBuildLog(outcome.build_id));
+    } catch (err) {
+      const code = isBackendError(err) ? err.code : "unknown";
+      const message = isBackendError(err) ? err.message : String(err);
+      setError(t(`projects.errors.${code}`, { message }));
     }
   }
 
@@ -130,24 +177,87 @@ function BuildPanel({ project, onClose }: { project: Project; onClose: () => voi
             </label>
           )}
 
+          <div className="flex flex-col gap-1">
+            <label className="flex flex-col gap-1">
+              {t("projects.build.buildCommand")}
+              <input
+                value={buildCommand}
+                onChange={(e) => {
+                  setBuildCommand(e.target.value);
+                  setCommandSaved(false);
+                }}
+                disabled={busy}
+                className="rounded-md border bg-background px-2 py-1.5"
+              />
+            </label>
+            <span className="text-muted-foreground text-xs">
+              {t("projects.build.buildCommandHint")}
+            </span>
+          </div>
+
+          <div>
+            <Button variant="outline" size="sm" onClick={handleSaveCommand} disabled={busy}>
+              {t("projects.build.saveCommand")}
+            </Button>
+            {commandSaved && (
+              <span role="status" className="ml-2 text-sm">
+                {t("projects.build.commandSaved")}
+              </span>
+            )}
+          </div>
+
           {busy && (
             <p role="status" aria-live="polite">
-              {progress?.total
-                ? t("projects.build.startingProgress", {
-                    branch,
-                    received: progress.received ?? 0,
-                    total: progress.total,
-                  })
-                : t("projects.build.starting")}
+              {logLines.length > 0
+                ? t("projects.build.building")
+                : cloneProgress?.total
+                  ? t("projects.build.cloningProgress", {
+                      received: cloneProgress.received ?? 0,
+                      total: cloneProgress.total,
+                    })
+                  : t("projects.build.cloning")}
             </p>
           )}
 
-          {readyPath && (
+          {outcome && (
             <div>
-              <p className="font-medium">{t("projects.build.ready")}</p>
-              <p className="text-muted-foreground">
-                {t("projects.build.readyPath", { path: readyPath })}
-              </p>
+              {outcome.success ? (
+                <p className="font-medium">{t("projects.build.buildSuccess")}</p>
+              ) : (
+                <p className="font-medium text-destructive">
+                  {t("projects.build.buildFailed", { code: outcome.exit_code ?? "-" })}
+                </p>
+              )}
+              <p className="text-muted-foreground text-xs">{outcome.log_path}</p>
+            </div>
+          )}
+
+          {logLines.length > 0 && (
+            <div>
+              <p className="font-medium">{t("projects.build.logTitle")}</p>
+              <pre
+                data-testid="build-live-log"
+                className="max-h-64 overflow-auto rounded-md border bg-background p-2 text-xs"
+              >
+                {logLines.join("\n")}
+              </pre>
+            </div>
+          )}
+
+          {fullLog !== null && (
+            <pre
+              data-testid="build-full-log"
+              className="max-h-64 overflow-auto rounded-md border bg-background p-2 text-xs"
+            >
+              {fullLog}
+            </pre>
+          )}
+
+          {outcome && !busy && (
+            <div>
+              <Button variant="outline" size="sm" onClick={handleViewLog}>
+                {t("projects.build.viewLog")}
+              </Button>
             </div>
           )}
 
