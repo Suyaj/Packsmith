@@ -4,19 +4,10 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import BuildPanel from "@/components/BuildPanel";
+import type { Project } from "@/lib/buildApi";
 
 type ProjectType = "maven" | "gradle";
-type ProjectSource = "git" | "local";
-
-interface Project {
-  id: number;
-  name: string;
-  source: ProjectSource;
-  url?: string | null;
-  path: string;
-  project_type: ProjectType;
-  created_at: string;
-}
 
 interface BackendError {
   code: string;
@@ -217,6 +208,7 @@ function ProjectsPage() {
   const { t } = useTranslation();
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [creating, setCreating] = useState(false);
+  const [buildTarget, setBuildTarget] = useState<Project | null>(null);
 
   const refresh = useCallback(async () => {
     setProjects(await invoke<Project[]>("list_projects"));
@@ -247,6 +239,10 @@ function ProjectsPage() {
         </div>
       </div>
 
+      {buildTarget && (
+        <BuildPanel project={buildTarget} onClose={() => setBuildTarget(null)} />
+      )}
+
       {creating && (
         <CreateProjectForm
           onCreated={async () => {
@@ -271,6 +267,7 @@ function ProjectsPage() {
                   <th className="py-1.5 pr-4 font-medium">{t("projects.columns.name")}</th>
                   <th className="py-1.5 pr-4 font-medium">{t("projects.columns.source")}</th>
                   <th className="py-1.5 pr-4 font-medium">{t("projects.columns.type")}</th>
+                  <th className="py-1.5 pr-4 font-medium"></th>
                 </tr>
               </thead>
               <tbody>
@@ -284,6 +281,15 @@ function ProjectsPage() {
                     </td>
                     <td className="py-1.5 pr-4">
                       {t(`projects.type.${p.project_type}`)}
+                    </td>
+                    <td className="py-1.5 pr-4">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setBuildTarget(p)}
+                      >
+                        {t("projects.build.button")}
+                      </Button>
                     </td>
                   </tr>
                 ))}

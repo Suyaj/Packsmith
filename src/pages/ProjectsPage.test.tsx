@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -225,5 +225,24 @@ describe("项目管理页", () => {
     });
     // 表单在取消克隆期间保持打开（等待后端返回结果）
     expect(screen.getByRole("button", { name: "取消克隆" })).toBeInTheDocument();
+  });
+
+  it("点击项目行的打包按钮打开打包面板，并按该项目实时拉取分支", async () => {
+    mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
+      if (cmd === "list_projects") return demoProjects;
+      if (cmd === "list_remote_branches") {
+        // 打包的是 legacy-app（id 2，本地导入项目）
+        expect(args).toEqual({ projectId: 2 });
+        return ["main", "release/1.0"];
+      }
+      throw new Error(`unexpected command: ${cmd}`);
+    });
+
+    renderPage();
+
+    const row = await screen.findByTestId("project-row-legacy-app");
+    await userEvent.click(within(row).getByRole("button", { name: "打包" }));
+
+    expect(await screen.findByLabelText("打包分支")).toBeInTheDocument();
   });
 });

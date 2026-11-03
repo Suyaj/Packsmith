@@ -50,6 +50,20 @@
       "cancel": "取消",
       "cancelClone": "取消克隆"
     },
+    "build": {
+      "button": "打包",
+      "title": "发起打包：{{name}}",
+      "branch": "打包分支",
+      "loadingBranches": "正在获取分支列表…",
+      "noBranches": "远程仓库没有可用分支",
+      "start": "开始打包",
+      "starting": "正在准备打包工作区…",
+      "startingProgress": "正在准备打包工作区… {{received}}/{{total}}",
+      "cancelWork": "取消打包",
+      "close": "关闭",
+      "ready": "临时工作区已就绪",
+      "readyPath": "代码已克隆到：{{path}}"
+    },
     "errors": {
       "duplicate_name": "已存在同名项目",
       "duplicate_url": "已存在相同 Git 地址的项目",
@@ -59,6 +73,8 @@
       "directory_exists": "目标目录已存在，请更换项目名称或工作区",
       "invalid_type": "不支持的项目类型",
       "clone_failed": "克隆失败：{{message}}",
+      "branch_listing_failed": "获取分支列表失败：{{message}}",
+      "project_not_found": "项目不存在",
       "cancelled": "克隆已取消",
       "store": "数据保存失败",
       "io": "读写磁盘失败：{{message}}",
