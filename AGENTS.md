@@ -11,6 +11,11 @@ Packsmith 是一个打包的桌面应用（当前支持 Java 打包，后续支�
 - **服务器管理**: 用于打包文件的上传与命令行启动相关操作，需要 SSH 管理
 - **设置**: 当前项目的版本信息，git、mvnd、java 等第三方工具依赖的检查和下载
 
+## Working conventions
+
+- **Git worktrees**: 所有实现用 worktree 一律放在 `/Users/wyy/RustRoverProjects/Packsmith-worktrees/` 下（命名如 `Packsmith-worktrees/ticket-07-build-execution`），不要放在仓库同级目录。分支随票命名 `ticket/NN-slug`，基于 `integration/packsmith-v1`。
+- **探索笔记**：实现前先读 `/Users/wyy/RustRoverProjects/Packsmith-notes/` 中对应主题的笔记（仓库外共享目录）。
+
 ## Agent skills
 
 ### Issue tracker

@@ -6,6 +6,7 @@ pub mod build;
 pub mod commands;
 pub mod server;
 pub mod store;
+pub mod targets;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -30,6 +31,10 @@ pub fn run() {
             server::commands::delete_server,
             server::commands::test_server_connection,
             server::commands::accept_host_key,
+            targets::commands::list_deployment_targets,
+            targets::commands::create_deployment_target,
+            targets::commands::update_deployment_target,
+            targets::commands::delete_deployment_target,
         ])
         .setup(|app| {
             // Auto-initialize the encrypted store on every startup: the key

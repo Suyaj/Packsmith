@@ -96,7 +96,6 @@ fn list_branches_sees_branches_added_after_the_fixture_was_created() {
         .is_sorted());
 
     let repo = git2::Repository::open(&fixture).unwrap();
-    let sig = git2::Signature::now("fixture", "fixture@example.com").unwrap();
     let head = repo
         .find_branch("main", git2::BranchType::Local)
         .unwrap()
