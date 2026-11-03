@@ -1,9 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Channel } from "@tauri-apps/api/core";
+import { ChevronsUpDownIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import DeployDialog from "@/components/DeployDialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Command,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { filterBranches } from "@/lib/branchFilter";
 import {
   cancelBuildWorkspace,
   listRemoteBranches,
@@ -25,6 +34,24 @@ function isBackendError(e: unknown): e is BackendError {
 /** 实时日志视图保留的最多行数（避免超长构建撑爆 DOM）。 */
 const MAX_LOG_LINES = 500;
 
+/** 分支项渲染：命中字符按下标高亮（模糊搜索匹配片段）。 */
+function HighlightedBranch({ text, indices }: { text: string; indices: number[] }) {
+  if (indices.length === 0) return <>{text}</>;
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  for (const idx of indices) {
+    if (idx > cursor) parts.push(text.slice(cursor, idx));
+    parts.push(
+      <span key={idx} data-highlight className="font-semibold text-primary">
+        {text[idx]}
+      </span>,
+    );
+    cursor = idx + 1;
+  }
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return <>{parts}</>;
+}
+
 /**
  * 打包面板（ticket 06/07）：打开时实时拉取分支列表（默认选中上次使用的
  * 分支），构建命令随项目可编辑；确认后走完整打包流程——创建临时工作区并
@@ -35,6 +62,8 @@ function BuildPanel({ project, onClose }: { project: Project; onClose: () => voi
   const { t } = useTranslation();
   const [branches, setBranches] = useState<string[] | null>(null);
   const [branch, setBranch] = useState("");
+  const [branchPickerOpen, setBranchPickerOpen] = useState(false);
+  const [branchQuery, setBranchQuery] = useState("");
   const [branchError, setBranchError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -190,18 +219,55 @@ function BuildPanel({ project, onClose }: { project: Project; onClose: () => voi
           {branches !== null && branches.length > 0 && (
             <label className="flex flex-col gap-1">
               {t("projects.build.branch")}
-              <select
-                value={branch}
-                onChange={(e) => setBranch(e.target.value)}
-                disabled={busy}
-                className="rounded-md border bg-background px-2 py-1.5"
+              <Popover
+                open={branchPickerOpen}
+                onOpenChange={(open) => {
+                  setBranchPickerOpen(open);
+                  // 关闭时清空搜索关键字，下次打开展示完整列表。
+                  if (!open) setBranchQuery("");
+                }}
               >
-                {branches.map((b) => (
-                  <option key={b} value={b}>
-                    {b}
-                  </option>
-                ))}
-              </select>
+                <PopoverTrigger asChild disabled={busy}>
+                  <Button
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={branchPickerOpen}
+                    className="w-full justify-between font-normal"
+                  >
+                    <span className="truncate">{branch || t("projects.build.selectBranch")}</span>
+                    <ChevronsUpDownIcon className="size-4 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-(--radix-popover-trigger-width) p-0">
+                  {/* 过滤由前端模糊匹配完成，关闭 cmdk 内置过滤。 */}
+                  <Command shouldFilter={false}>
+                    <CommandInput
+                      value={branchQuery}
+                      onValueChange={setBranchQuery}
+                      placeholder={t("projects.build.searchBranch")}
+                    />
+                    <CommandList>
+                      {filterBranches(branches, branchQuery).map(({ branch: b, indices }) => (
+                        <CommandItem
+                          key={b}
+                          value={b}
+                          onSelect={(value) => {
+                            setBranch(value);
+                            setBranchPickerOpen(false);
+                          }}
+                        >
+                          <HighlightedBranch text={b} indices={indices} />
+                        </CommandItem>
+                      ))}
+                      {filterBranches(branches, branchQuery).length === 0 && (
+                        <div className="py-6 text-center text-sm text-muted-foreground">
+                          {t("projects.build.noMatchingBranches")}
+                        </div>
+                      )}
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
             </label>
           )}
 

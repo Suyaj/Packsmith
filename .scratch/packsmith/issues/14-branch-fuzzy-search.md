@@ -4,7 +4,7 @@
 
 **Blocked by:** None（基于集成 tip）
 
-**Status:** ready-for-agent
+**Status:** resolved（实现：BuildPanel 分支下拉升级为 cmdk+Popover combobox，`src/lib/branchFilter.ts` 纯函数子序列模糊匹配（大小写不敏感）+ 命中字符高亮 + 空状态提示；行为：预选/拉取/选中回填不变，键盘上下/回车/Esc 可用）
 
 - [ ] 输入关键字实时模糊过滤分支列表，命中高亮
 - [ ] 选中后回填选择框，打包流程使用所选分支（行为与原下拉一致）
