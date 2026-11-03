@@ -175,7 +175,6 @@ fn correct_key_succeeds_and_stores_accepted_fingerprint() {
 #[test]
 fn wrong_key_fails_with_concrete_auth_reason() {
     let Some(env) = ssh_env() else { return };
-    let dir = tempfile::tempdir().unwrap();
     // Generate a key the server does not know.
     let key_dir = tempfile::tempdir().unwrap();
     let unknown_key = key_dir.path().join("unknown_key");

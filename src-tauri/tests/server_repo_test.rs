@@ -165,3 +165,23 @@ fn servers_survive_an_app_restart() {
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].host, "web-1");
 }
+
+#[test]
+fn credentials_are_not_readable_from_the_raw_database_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("test.db");
+
+    let store = packsmith_lib::store::Store::open(&db, TEST_KEY_HEX).unwrap();
+    repo::create(&store, &password_server("web-1")).unwrap();
+    repo::create(&store, &key_server("db-1")).unwrap();
+    drop(store);
+
+    let raw = std::fs::read(&db).unwrap();
+    let raw_text = raw.iter().map(|&b| b as char).collect::<String>();
+    for secret in ["s3cret", "key-pass", "/home/me/id_ed25519"] {
+        assert!(
+            !raw_text.contains(secret),
+            "raw db file must not contain the plaintext secret {secret:?} (SQLCipher must be doing the encryption)"
+        );
+    }
+}

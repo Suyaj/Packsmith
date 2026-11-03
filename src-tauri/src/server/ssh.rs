@@ -87,7 +87,7 @@ pub fn check_host_key(
 }
 
 fn fingerprint_of(key: &russh::keys::PublicKeyOrCertificate) -> String {
-    key.fingerprint(HashAlg::Sha256)
+    key.public_key().fingerprint(HashAlg::Sha256).to_string()
 }
 
 /// `russh::client::Handler` recording what it saw, so the caller can
@@ -218,7 +218,7 @@ async fn run_test(
         }
     };
 
-    if !auth_result.success {
+    if !auth_result.success() {
         return TestOutcome::AuthFailed {
             method: match req.credential {
                 Credential::Password { .. } => AuthMethod::Password,

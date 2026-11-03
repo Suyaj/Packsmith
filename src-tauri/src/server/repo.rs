@@ -172,7 +172,7 @@ pub fn list(store: &Store) -> Result<Vec<Server>, RepoError> {
 
 /// Inserts a server and returns the persisted record (with its id).
 pub fn create(store: &Store, server: &NewServer) -> Result<Server, RepoError> {
-    let id = store.with(|conn| insert(conn, server))??;
+    let id = store.with(|conn| insert(conn, server))?;
     Ok(Server {
         id,
         host: server.host.clone(),
@@ -202,7 +202,7 @@ pub fn update(store: &Store, server: &Server) -> Result<Server, RepoError> {
                 server.id
             ],
         )
-    })??;
+    })?;
     if changed == 0 {
         return Err(RepoError::Sql(rusqlite::Error::QueryReturnedNoRows));
     }
@@ -212,7 +212,7 @@ pub fn update(store: &Store, server: &Server) -> Result<Server, RepoError> {
 /// Deletes a server. Returns whether a row was actually removed.
 pub fn delete(store: &Store, id: i64) -> Result<bool, RepoError> {
     let changed = store
-        .with(|conn| conn.execute("DELETE FROM servers WHERE id = ?1", params![id]))??;
+        .with(|conn| conn.execute("DELETE FROM servers WHERE id = ?1", params![id]))?;
     Ok(changed > 0)
 }
 

@@ -7,4 +7,3 @@
 pub mod commands;
 pub mod repo;
 pub mod ssh;
-pub mod ssh;
