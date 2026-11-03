@@ -78,6 +78,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         name: "ticket 07: projects.build_command (随项目可编辑的构建命令)",
         sql: "ALTER TABLE projects ADD COLUMN build_command TEXT NOT NULL DEFAULT 'mvnd package -DskipTests';",
     },
+    Migration {
+        version: 7,
+        name: "ticket 11: 关窗行为设置默认值 (close_window_behavior)",
+        sql: "INSERT OR IGNORE INTO app_meta (key, value) VALUES ('close_window_behavior', 'minimize');",
+    },
 ];
 
 pub(crate) const LATEST_SCHEMA_VERSION: i32 = MIGRATIONS[MIGRATIONS.len() - 1].version;

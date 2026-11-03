@@ -21,6 +21,7 @@ use crate::build::{self, exec, BuildError, BuildEvent, BuildOutcome, PreparedWor
 use crate::commands::ApiError;
 use crate::store::projects::{self, new_cancel_flag, CancelFlag, Project, ProjectError};
 use crate::store::Store;
+use crate::tray;
 
 impl From<BuildError> for ApiError {
     fn from(e: BuildError) -> Self {
@@ -28,10 +29,32 @@ impl From<BuildError> for ApiError {
     }
 }
 
+/// 注册/注销一个打包任务并刷新托盘的构建状态提示（注册表非空 = 打包进行中）。
+fn register_build(
+    app: &AppHandle,
+    registry: &BuildRegistry,
+    project_id: i64,
+    cancel: &CancelFlag,
+) {
+    {
+        let mut slots = registry.0.lock().expect("build registry poisoned");
+        slots.insert(project_id, cancel.clone());
+    }
+    tray::refresh_build_state(app);
+}
+
+fn unregister_build(app: &AppHandle, registry: &BuildRegistry, project_id: i64) {
+    {
+        let mut slots = registry.0.lock().expect("build registry poisoned");
+        slots.remove(&project_id);
+    }
+    tray::refresh_build_state(app);
+}
+
 /// 打包准备任务的取消标志注册表：按项目 id 存取（同一项目同时只能有一个
 /// 进行中的打包准备）。
 #[derive(Default)]
-pub struct BuildRegistry(Mutex<HashMap<i64, CancelFlag>>);
+pub struct BuildRegistry(pub(crate) Mutex<HashMap<i64, CancelFlag>>);
 
 /// 实时拉取项目的分支列表（打包面板打开时调用）。
 ///
@@ -72,11 +95,7 @@ pub async fn start_build_workspace(
 ) -> Result<PreparedWorkspace, ApiError> {
     let cancel = new_cancel_flag();
     if let Some(registry) = app.try_state::<BuildRegistry>() {
-        registry
-            .0
-            .lock()
-            .expect("build registry poisoned")
-            .insert(project_id, cancel.clone());
+        register_build(&app, &registry, project_id, &cancel);
     }
 
     let handle = app.clone();
@@ -92,11 +111,7 @@ pub async fn start_build_workspace(
     .map_err(|e| ApiError::raw("clone_failed", e.to_string()))?;
 
     if let Some(registry) = app.try_state::<BuildRegistry>() {
-        registry
-            .0
-            .lock()
-            .expect("build registry poisoned")
-            .remove(&project_id);
+        unregister_build(&app, &registry, project_id);
     }
 
     result.map_err(Into::into)
@@ -131,11 +146,14 @@ pub async fn start_build(
 ) -> Result<BuildOutcome, ApiError> {
     let cancel = new_cancel_flag();
     if let Some(registry) = app.try_state::<BuildRegistry>() {
-        let mut slots = registry.0.lock().expect("build registry poisoned");
-        if slots.contains_key(&project_id) {
-            return Err(ApiError::from(BuildError::AlreadyRunning));
+        {
+            let mut slots = registry.0.lock().expect("build registry poisoned");
+            if slots.contains_key(&project_id) {
+                return Err(ApiError::from(BuildError::AlreadyRunning));
+            }
+            slots.insert(project_id, cancel.clone());
         }
-        slots.insert(project_id, cancel.clone());
+        tray::refresh_build_state(&app);
     }
 
     let tools_root = crate::toolchain::tools_root(&app)
@@ -156,11 +174,7 @@ pub async fn start_build(
             .await;
 
     if let Some(registry) = app.try_state::<BuildRegistry>() {
-        registry
-            .0
-            .lock()
-            .expect("build registry poisoned")
-            .remove(&project_id);
+        unregister_build(&app, &registry, project_id);
     }
 
     result.map_err(Into::into)

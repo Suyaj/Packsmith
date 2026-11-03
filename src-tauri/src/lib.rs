@@ -1,10 +1,13 @@
+mod settings_commands;
 mod toolchain;
+mod tray;
 
 use tauri::Manager;
 
 pub mod build;
 pub mod commands;
 pub mod server;
+pub mod settings;
 pub mod store;
 pub mod targets;
 
@@ -38,7 +41,24 @@ pub fn run() {
             targets::commands::create_deployment_target,
             targets::commands::update_deployment_target,
             targets::commands::delete_deployment_target,
+            settings_commands::get_close_window_behavior,
+            settings_commands::set_close_window_behavior,
         ])
+        .on_window_event(|window, event| {
+            // 关窗行为随设置生效（ticket 11）：最小化到托盘 = 拦截关闭并隐藏；
+            // 退出应用 = 放行关闭。托盘菜单的"退出应用"不经过这里，始终退出。
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let app = window.app_handle();
+                let behavior = app
+                    .try_state::<store::Store>()
+                    .and_then(|store| settings::get_close_window_behavior(&store).ok())
+                    .unwrap_or_default();
+                if settings::close_action(behavior) == settings::CloseAction::HideToTray {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .setup(|app| {
             // Auto-initialize the encrypted store on every startup: the key
             // is generated on first run and kept in the OS keychain, so the
@@ -46,6 +66,9 @@ pub fn run() {
             let db_path = app.path().app_data_dir()?.join("packsmith.db");
             let store = store::Store::open_default(&db_path)?;
             app.manage(store);
+
+            // 系统托盘常驻（ticket 11）：打开主界面 / 退出应用。
+            tray::build_tray(app.handle())?;
             Ok(())
         })
         .run(tauri::generate_context!())

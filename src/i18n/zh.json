@@ -193,6 +193,15 @@
         "jdk": "JDK（默认 1.8）",
         "mvnd": "mvnd"
       }
+    },
+    "closeBehavior": {
+      "title": "关闭窗口行为",
+      "description": "点击窗口关闭按钮时的行为；托盘菜单中的\"退出应用\"始终可用。",
+      "minimize": "最小化到托盘",
+      "minimizeHint": "窗口关闭后隐藏到系统托盘，应用继续运行（默认）",
+      "quit": "退出应用",
+      "quitHint": "关闭窗口时直接退出 Packsmith",
+      "saveError": "保存失败：{{error}}"
     }
   }
 }
