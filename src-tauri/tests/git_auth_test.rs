@@ -94,3 +94,64 @@ fn error_codes_are_stable_for_i18n() {
         "ssh_not_supported"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 真网络测试（默认忽略）：对真实私有 HTTPS 仓库验证端到端认证。
+// git2 本地传输忽略凭据，进程内无法密闭模拟真 HTTP 认证；用户提供真实
+// 私有仓库凭据后运行：
+//
+//   PACKSMITH_TEST_GIT_URL=https://github.com/<owner>/<private>.git \
+//   PACKSMITH_TEST_GIT_USERNAME=<user> PACKSMITH_TEST_GIT_TOKEN=<token> \
+//   cargo test --test git_auth_test -- --ignored
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "needs real private HTTPS repo credentials via env vars"]
+fn real_network_private_repo_clone_with_configured_credentials() {
+    let Ok(url) = std::env::var("PACKSMITH_TEST_GIT_URL") else {
+        panic!("set PACKSMITH_TEST_GIT_URL / _USERNAME / _TOKEN to run this test");
+    };
+    let username = std::env::var("PACKSMITH_TEST_GIT_USERNAME").unwrap();
+    let token = std::env::var("PACKSMITH_TEST_GIT_TOKEN").unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = packsmith_lib::store::Store::open(
+        &dir.path().join("test.db"),
+        "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+    )
+    .unwrap();
+    packsmith_lib::store::settings::set_git_username(&store, &username).unwrap();
+    packsmith_lib::store::settings::set_git_token(&store, &token).unwrap();
+    assert!(packsmith_lib::git_auth::credentials_from_store(&store).is_some());
+
+    let dest = dir.path().join("private-clone");
+    let err = packsmith_lib::store::projects::clone_repo(
+        &url,
+        &dest,
+        None,
+        &mut |_| {},
+        &packsmith_lib::store::projects::new_cancel_flag(),
+        packsmith_lib::git_auth::credentials_from_store(&store).as_ref(),
+    )
+    .err();
+    assert!(
+        err.is_none(),
+        "配置了凭据的私有仓库 clone 应成功，得到: {err:?}"
+    );
+    assert!(dest.join(".git").exists());
+
+    // 对照：未配置凭据时同一仓库必须失败为 git_auth_failed。
+    std::fs::remove_dir_all(&dest).unwrap();
+    packsmith_lib::store::settings::clear_git_account(&store).unwrap();
+    let err = packsmith_lib::store::projects::clone_repo(
+        &url,
+        &dest,
+        None,
+        &mut |_| {},
+        &packsmith_lib::store::projects::new_cancel_flag(),
+        None,
+    )
+    .err()
+    .expect("未配置凭据时私有仓库 clone 应失败");
+    assert_eq!(err.code(), "git_auth_failed");
+}
