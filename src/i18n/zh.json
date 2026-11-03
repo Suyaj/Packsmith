@@ -5,12 +5,34 @@
   "nav": {
     "home": "首页",
     "projects": "项目管理",
+    "history": "构建历史",
     "servers": "服务器管理",
     "settings": "设置"
   },
   "home": {
     "title": "首页",
-    "empty": "暂无打包记录"
+    "empty": "暂无打包记录",
+    "recentBuilds": "最近打包记录",
+    "viewAll": "查看全部"
+  },
+  "history": {
+    "title": "构建历史",
+    "listTitle": "全部构建记录",
+    "empty": "暂无构建记录",
+    "loading": "正在加载构建历史…",
+    "loadFailed": "加载构建历史失败：{{detail}}",
+    "filterProject": "按项目筛选",
+    "allProjects": "全部项目",
+    "resultSuccess": "成功",
+    "resultFailed": "失败（退出码 {{code}}）",
+    "viewLog": "查看日志",
+    "artifacts": "构件",
+    "artifactsEmpty": "该构建没有入库构件",
+    "artifactSize": "{{size}} 字节",
+    "delete": "删除",
+    "confirmDelete": "确定删除该构建记录吗？其构件与构建日志将一并删除。",
+    "cleanup": "清理该项目历史",
+    "confirmCleanup": "确定清理该项目的全部构建历史与构件吗？"
   },
   "projects": {
     "title": "项目管理",
@@ -173,6 +195,14 @@
   "settings": {
     "title": "设置",
     "empty": "设置项即将可用",
+    "retention": {
+      "title": "构件库保留策略",
+      "description": "每个项目在产物库中保留最近 N 次构建的构件与日志，超出自动清理。",
+      "label": "保留次数",
+      "save": "保存",
+      "saved": "已保存",
+      "invalid": "保留次数必须是不小于 1 的整数"
+    },
     "toolchain": {
       "title": "托管工具链",
       "description": "Packsmith 执行只使用托管工具链；系统 PATH 上的同名工具仅用于检测展示，不作为执行来源。",

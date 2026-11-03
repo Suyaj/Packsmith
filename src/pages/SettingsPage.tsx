@@ -16,6 +16,7 @@ import {
   ToolKind,
   ToolStatus,
 } from "@/lib/toolchain";
+import { getBuildRetention, setBuildRetention } from "@/lib/historyApi";
 
 const TOOL_ORDER: ToolKind[] = ["git", "jdk", "mvnd"];
 
@@ -144,6 +145,80 @@ function ToolRow({
   );
 }
 
+/**
+ * 构件库保留策略（ticket 08）：每个项目在产物库中保留最近 N 次构建的构件
+ * 与日志，超出在每次构建入库后自动清理。
+ */
+function RetentionCard() {
+  const { t } = useTranslation();
+  const [value, setValue] = useState<string>("");
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    // 读取失败不阻塞页面：后端读取侧自带默认值回退。
+    getBuildRetention()
+      .then((n) => setValue(String(n)))
+      .catch(() => {});
+  }, []);
+
+  async function handleSave() {
+    setError(null);
+    setSaved(false);
+    const n = Number(value);
+    if (!Number.isInteger(n) || n < 1) {
+      setError(t("settings.retention.invalid"));
+      return;
+    }
+    try {
+      await setBuildRetention(n);
+      setSaved(true);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  return (
+    <Card className="mt-4">
+      <CardHeader>
+        <CardTitle>{t("settings.retention.title")}</CardTitle>
+        <CardDescription>{t("settings.retention.description")}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2 text-sm">
+            {t("settings.retention.label")}
+            <input
+              type="number"
+              min={1}
+              aria-label={t("settings.retention.label")}
+              value={value}
+              onChange={(e) => {
+                setValue(e.target.value);
+                setSaved(false);
+              }}
+              className="w-24 rounded-md border bg-background px-2 py-1.5"
+            />
+          </label>
+          <Button size="sm" variant="outline" onClick={handleSave}>
+            {t("settings.retention.save")}
+          </Button>
+          {saved && (
+            <span role="status" className="text-sm">
+              {t("settings.retention.saved")}
+            </span>
+          )}
+        </div>
+        {error && (
+          <p role="alert" className="mt-2 text-sm text-destructive">
+            {error}
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function SettingsPage() {
   const { t } = useTranslation();
   const [rows, setRows] = useState<Rows | null>(null);
@@ -244,6 +319,7 @@ function SettingsPage() {
           )}
         </CardContent>
       </Card>
+      <RetentionCard />
     </section>
   );
 }

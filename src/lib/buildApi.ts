@@ -37,6 +37,11 @@ export function listRemoteBranches(projectId: number): Promise<string[]> {
   return invoke("list_remote_branches", { projectId });
 }
 
+/** 列出全部项目（按创建时间先后）。 */
+export function listProjects(): Promise<Project[]> {
+  return invoke("list_projects");
+}
+
 /** 发起打包前半段：创建临时工作区并 clone 所选分支，成功即记住该分支。 */
 export function startBuildWorkspace(
   projectId: number,
