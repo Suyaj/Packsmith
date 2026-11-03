@@ -317,7 +317,7 @@ async fn 工具链缺失_报缺失错误且不留工作区() {
 #[tokio::test]
 async fn 构建日志可按id读回_非法id被拒绝() {
     let fx = setup(success_script());
-    let (events, on_event) = event_collector();
+    let (_events, on_event) = event_collector();
     let cancel = projects::new_cancel_flag();
 
     let outcome = build::run_build_flow_in(
