@@ -143,6 +143,8 @@ describe("设置页：托管工具链", () => {
       if (cmd === "toolchain_status") return fixtureStatuses;
       if (cmd === "get_close_window_behavior") return "minimize";
       if (cmd === "get_git_account") return { username: null, hasToken: false };
+      if (cmd === "get_mvnd_settings_xml")
+        return { content: null, fileExists: false };
       throw new Error("网络下载失败：连接超时");
     });
     render(<SettingsPage />);
@@ -488,5 +490,136 @@ describe("设置页：Git 账号（票 13）", () => {
     await user.click(within(card).getByRole("button", { name: "保存" }));
 
     expect(await within(card).findByText(/用户名不能为空/)).toBeInTheDocument();
+  });
+});
+
+describe("设置页：mvnd settings.xml（票 18）", () => {
+  type MvndState = { content: string | null; fileExists: boolean };
+
+  function mockMvnd(state: MvndState) {
+    let current = state;
+    mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
+      switch (cmd) {
+        case "toolchain_status":
+          return fixtureStatuses;
+        case "get_mvnd_settings_xml":
+          return current;
+        case "set_mvnd_settings_xml": {
+          const a = args as { content: string };
+          current = { content: a.content, fileExists: true };
+          return current;
+        }
+        case "clear_mvnd_settings_xml":
+          current = { content: null, fileExists: false };
+          return current;
+        default:
+          throw new Error(`unexpected command ${cmd}`);
+      }
+    });
+  }
+
+  function card(): HTMLElement {
+    return screen
+      .getByText("mvnd settings.xml")
+      .closest('[data-slot="card"]') as HTMLElement;
+  }
+
+  it("未设置时显示未设置指示、无清空按钮", async () => {
+    mockMvnd({ content: null, fileExists: false });
+    render(<SettingsPage />);
+
+    await within(card()).findByText("未设置");
+    expect(
+      within(card()).queryByRole("button", { name: "清空" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("加载时回填已保存的 XML 内容并显示已设置", async () => {
+    mockMvnd({ content: "<settings><mirrors/></settings>", fileExists: true });
+    render(<SettingsPage />);
+
+    await within(card()).findByText("已设置");
+    const textarea = within(card()).getByLabelText(
+      "settings.xml 内容",
+    ) as HTMLTextAreaElement;
+    expect(textarea.value).toBe("<settings><mirrors/></settings>");
+    // 内容是配置而非机密：回显为可读文本
+    expect(textarea).not.toHaveAttribute("type", "password");
+  });
+
+  it("保存调用 set_mvnd_settings_xml 并显示已保存与已设置", async () => {
+    const user = userEvent.setup();
+    mockMvnd({ content: null, fileExists: false });
+    render(<SettingsPage />);
+
+    await within(card()).findByText("未设置");
+    await user.type(
+      within(card()).getByLabelText("settings.xml 内容"),
+      "<settings/>",
+    );
+    await user.click(within(card()).getByRole("button", { name: "保存" }));
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("set_mvnd_settings_xml", {
+        content: "<settings/>",
+      });
+    });
+    expect(await within(card()).findByText("已保存")).toBeInTheDocument();
+    expect(await within(card()).findByText("已设置")).toBeInTheDocument();
+    // 设置后出现清空按钮
+    expect(
+      within(card()).getByRole("button", { name: "清空" }),
+    ).toBeInTheDocument();
+  });
+
+  it("清空调用 clear_mvnd_settings_xml、清空输入并恢复未设置", async () => {
+    const user = userEvent.setup();
+    mockMvnd({ content: "<settings/>", fileExists: true });
+    render(<SettingsPage />);
+
+    await within(card()).findByText("已设置");
+    await user.click(within(card()).getByRole("button", { name: "清空" }));
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("clear_mvnd_settings_xml");
+    });
+    expect(await within(card()).findByText("未设置")).toBeInTheDocument();
+    expect(within(card()).getByLabelText("settings.xml 内容")).toHaveValue("");
+  });
+
+  it("编辑框为等宽多行文本域", async () => {
+    mockMvnd({ content: null, fileExists: false });
+    render(<SettingsPage />);
+
+    const textarea = await within(card()).findByLabelText(
+      "settings.xml 内容",
+    );
+    expect(textarea.tagName).toBe("TEXTAREA");
+    expect(textarea).toHaveClass("font-mono");
+  });
+
+  it("保存失败时显示错误且不清空输入", async () => {
+    const user = userEvent.setup();
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "toolchain_status") return fixtureStatuses;
+      if (cmd === "get_mvnd_settings_xml")
+        return { content: null, fileExists: false };
+      if (cmd === "set_mvnd_settings_xml")
+        throw { code: "io", message: "磁盘写入失败" };
+      throw new Error(`unexpected command ${cmd}`);
+    });
+    render(<SettingsPage />);
+
+    await within(card()).findByText("未设置");
+    await user.type(
+      within(card()).getByLabelText("settings.xml 内容"),
+      "<settings/>",
+    );
+    await user.click(within(card()).getByRole("button", { name: "保存" }));
+
+    expect(await within(card()).findByText(/磁盘写入失败/)).toBeInTheDocument();
+    expect(within(card()).getByLabelText("settings.xml 内容")).toHaveValue(
+      "<settings/>",
+    );
   });
 });

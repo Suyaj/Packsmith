@@ -29,6 +29,12 @@ import {
   saveGitAccount,
   type GitAccount,
 } from "@/lib/gitAccountApi";
+import {
+  clearMvndSettingsXml,
+  fetchMvndSettingsXml,
+  saveMvndSettingsXml,
+  type MvndSettingsXml,
+} from "@/lib/mvndSettingsApi";
 
 const TOOL_ORDER: ToolKind[] = ["git", "jdk", "mvnd"];
 
@@ -477,6 +483,119 @@ function extractErrorDetail(e: unknown): string | null {
   return null;
 }
 
+/**
+ * mvnd settings.xml（票 18）：私服依赖的全局 Maven settings.xml。内容是配置
+ * 而非机密，可明文回传做编辑回填；保存由后端写入加密库并物化到
+ * `<appdata>/mvnd-settings.xml`（构建时自动追加 -s），前端从不直接写文件。
+ */
+function MvndSettingsCard() {
+  const { t } = useTranslation();
+  const [state, setState] = useState<MvndSettingsXml | null>(null);
+  const [content, setContent] = useState("");
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    fetchMvndSettingsXml()
+      .then((s) => {
+        if (disposed) return;
+        setState(s);
+        setContent(s.content ?? "");
+      })
+      .catch((e) => {
+        if (!disposed) setError(String(e));
+      });
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
+  const configured = state !== null && state.content !== null;
+
+  async function handleSave() {
+    setError(null);
+    setSaved(false);
+    try {
+      const updated = await saveMvndSettingsXml(content);
+      setState(updated);
+      setSaved(true);
+    } catch (e) {
+      setError(extractErrorDetail(e) ?? String(e));
+    }
+  }
+
+  async function handleClear() {
+    setError(null);
+    setSaved(false);
+    try {
+      const updated = await clearMvndSettingsXml();
+      setState(updated);
+      setContent("");
+    } catch (e) {
+      setError(extractErrorDetail(e) ?? String(e));
+    }
+  }
+
+  return (
+    <Card className="mt-4">
+      <CardHeader>
+        <CardTitle>{t("settings.mvndSettings.title")}</CardTitle>
+        <CardDescription>
+          {t("settings.mvndSettings.description")}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="flex items-center gap-3">
+          {configured ? (
+            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
+              {t("settings.mvndSettings.set")}
+            </span>
+          ) : (
+            <span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground">
+              {t("settings.mvndSettings.unset")}
+            </span>
+          )}
+        </div>
+        <label className="mt-3 block text-sm">
+          {t("settings.mvndSettings.label")}
+          <textarea
+            rows={10}
+            aria-label={t("settings.mvndSettings.label")}
+            value={content}
+            spellCheck={false}
+            onChange={(e) => {
+              setContent(e.target.value);
+              setSaved(false);
+            }}
+            className="mt-1 w-full rounded-md border bg-background px-2 py-1.5 font-mono text-xs"
+          />
+        </label>
+        <div className="mt-3 flex items-center gap-3">
+          <Button size="sm" variant="outline" onClick={handleSave}>
+            {t("settings.mvndSettings.save")}
+          </Button>
+          {configured && (
+            <Button size="sm" variant="ghost" onClick={handleClear}>
+              {t("settings.mvndSettings.clear")}
+            </Button>
+          )}
+          {saved && (
+            <span role="status" className="text-sm">
+              {t("settings.mvndSettings.saved")}
+            </span>
+          )}
+        </div>
+        {error && (
+          <p role="alert" className="mt-2 text-sm text-destructive">
+            {t("settings.mvndSettings.saveError", { error })}
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function SettingsPage() {
   const { t } = useTranslation();
   const [rows, setRows] = useState<Rows | null>(null);
@@ -598,6 +717,7 @@ function SettingsPage() {
       <RetentionCard />
       <CloseBehaviorCard />
       <GitAccountCard />
+      <MvndSettingsCard />
     </section>
   );
 }
