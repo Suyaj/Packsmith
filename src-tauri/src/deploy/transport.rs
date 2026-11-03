@@ -14,13 +14,13 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use russh::client::{AuthResult, Handle};
 use russh::ChannelMsg;
+use russh::client::{AuthResult, Handle};
 use russh_sftp::client::SftpSession;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::engine::{DeployTransport, ExecOutput, TransportError};
-use crate::server::ssh::{check_host_key, fingerprint_of, HostKeyCheck};
+use crate::server::ssh::{HostKeyCheck, check_host_key, fingerprint_of};
 
 /// Generous ceiling for one command group / one SFTP operation; real
 /// deployments finish far below this. Cancellation (v1) happens between
@@ -73,7 +73,9 @@ fn transport_error_with_context(
 }
 
 fn unreachable(e: russh::Error) -> TransportError {
-    TransportError::Unreachable { detail: e.to_string() }
+    TransportError::Unreachable {
+        detail: e.to_string(),
+    }
 }
 
 /// A connected + authenticated SSH session to one target's server.
@@ -121,7 +123,9 @@ impl SshTransport {
                 match handle.authenticate_password(&conn.username, password).await {
                     Ok(result) => result,
                     Err(e) => {
-                        return Err(TransportError::Unreachable { detail: e.to_string() });
+                        return Err(TransportError::Unreachable {
+                            detail: e.to_string(),
+                        });
                     }
                 }
             }
@@ -137,7 +141,9 @@ impl SshTransport {
                 let hash = match handle.best_supported_rsa_hash().await {
                     Ok(hash) => hash.flatten(),
                     Err(e) => {
-                        return Err(TransportError::Unreachable { detail: e.to_string() });
+                        return Err(TransportError::Unreachable {
+                            detail: e.to_string(),
+                        });
                     }
                 };
                 match handle
@@ -149,7 +155,9 @@ impl SshTransport {
                 {
                     Ok(result) => result,
                     Err(e) => {
-                        return Err(TransportError::Unreachable { detail: e.to_string() });
+                        return Err(TransportError::Unreachable {
+                            detail: e.to_string(),
+                        });
                     }
                 }
             }
@@ -249,7 +257,10 @@ impl DeployTransport for SshTransport {
                 if !progress(done, total) {
                     return Err(TransportError::Cancelled);
                 }
-                let n = local.read(&mut buf).await.map_err(|e| TransportError::Io(e.to_string()))?;
+                let n = local
+                    .read(&mut buf)
+                    .await
+                    .map_err(|e| TransportError::Io(e.to_string()))?;
                 if n == 0 {
                     break;
                 }
@@ -261,6 +272,13 @@ impl DeployTransport for SshTransport {
             }
             progress(done, total);
             let _ = remote.sync_all().await;
+            // 数据完整性关口：write 的回执只在 shutdown 时统一核对
+            // （russh-sftp 的已知弱点——drop 不等待回执，写错误会被静默
+            // 丢弃），所以必须显式 await shutdown 并检查其结果。
+            remote
+                .shutdown()
+                .await
+                .map_err(|e| TransportError::Io(format!("{remote_path}: {e}")))?;
             Ok(())
         };
         tokio::time::timeout(OPERATION_TIMEOUT, future)
@@ -281,8 +299,7 @@ async fn ensure_remote_dir(sftp: &SftpSession, dir: &str) -> Result<(), Transpor
     for part in dir.split('/').filter(|p| !p.is_empty()) {
         current = format!("{current}/{part}");
         if sftp.metadata(&current).await.is_err() {
-            sftp
-                .create_dir(&current)
+            sftp.create_dir(&current)
                 .await
                 .map_err(|e| TransportError::Io(format!("mkdir {current}: {e}")))?;
         }
