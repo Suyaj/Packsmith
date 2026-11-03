@@ -71,7 +71,11 @@
       "buildFailed": "构建失败（退出码 {{code}}）",
       "buildCancelled": "打包已取消",
       "viewLog": "查看完整日志",
-      "logTitle": "构建日志"
+      "logTitle": "构建日志",
+      "artifactAutoSelected": "已自动选中构件：{{name}}",
+      "artifactPickerTitle": "构件选择",
+      "saveDefaultArtifact": "保存默认构件",
+      "defaultArtifactSaved": "默认构件已保存"
     },
     "errors": {
       "duplicate_name": "已存在同名项目",

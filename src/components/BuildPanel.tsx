@@ -7,6 +7,7 @@ import {
   cancelBuildWorkspace,
   listRemoteBranches,
   readBuildLog,
+  setDefaultArtifact,
   startBuild,
   updateBuildCommand,
   type BuildEvent,
@@ -44,6 +45,8 @@ function BuildPanel({ project, onClose }: { project: Project; onClose: () => voi
   const [fullLog, setFullLog] = useState<string | null>(null);
   const [buildCommand, setBuildCommand] = useState(project.build_command);
   const [commandSaved, setCommandSaved] = useState(false);
+  const [selectedArtifact, setSelectedArtifact] = useState<string | null>(null);
+  const [defaultArtifactSaved, setDefaultArtifactSaved] = useState(false);
 
   // 打开面板即实时拉取分支列表（远程新建分支可见）。
   useEffect(() => {
@@ -94,12 +97,20 @@ function BuildPanel({ project, onClose }: { project: Project; onClose: () => voi
     setFullLog(null);
     setLogLines([]);
     setCloneProgress(null);
+    setDefaultArtifactSaved(false);
+    setSelectedArtifact(null);
     setBusy(true);
     try {
       const onEvent = new Channel<BuildEvent>();
       onEvent.onmessage = handleEvent;
       const result = await startBuild(project.id, branch, onEvent);
       setOutcome(result);
+      // 多构件时弹出勾选：默认构件预选中（单构件后端已自动选中并记住）。
+      if (result.artifacts.length > 1) {
+        const names = result.artifacts.map((a) => a.file_name);
+        const fallback = project.default_artifact;
+        setSelectedArtifact(fallback && names.includes(fallback) ? fallback : names[0]);
+      }
     } catch (err) {
       const code = isBackendError(err) ? err.code : "unknown";
       const message = isBackendError(err) ? err.message : String(err);
@@ -116,6 +127,21 @@ function BuildPanel({ project, onClose }: { project: Project; onClose: () => voi
       const updated = await updateBuildCommand(project.id, buildCommand.trim());
       setBuildCommand(updated.build_command);
       setCommandSaved(true);
+    } catch (err) {
+      const code = isBackendError(err) ? err.code : "unknown";
+      const message = isBackendError(err) ? err.message : String(err);
+      setError(t(`projects.errors.${code}`, { message }));
+    }
+  }
+
+  /** 多构件构建：把勾选结果保存为该项目默认构件。 */
+  async function handleSaveDefaultArtifact() {
+    if (!selectedArtifact) return;
+    setError(null);
+    setDefaultArtifactSaved(false);
+    try {
+      await setDefaultArtifact(project.id, selectedArtifact);
+      setDefaultArtifactSaved(true);
     } catch (err) {
       const code = isBackendError(err) ? err.code : "unknown";
       const message = isBackendError(err) ? err.message : String(err);
@@ -228,8 +254,47 @@ function BuildPanel({ project, onClose }: { project: Project; onClose: () => voi
                   {t("projects.build.buildFailed", { code: outcome.exit_code ?? "-" })}
                 </p>
               )}
+              {outcome.success && outcome.artifacts.length === 1 && (
+                <p role="status" className="text-sm">
+                  {t("projects.build.artifactAutoSelected", {
+                    name: outcome.artifacts[0].file_name,
+                  })}
+                </p>
+              )}
               <p className="text-muted-foreground text-xs">{outcome.log_path}</p>
             </div>
+          )}
+
+          {outcome && outcome.success && outcome.artifacts.length > 1 && (
+            <fieldset>
+              <legend className="text-sm font-medium">
+                {t("projects.build.artifactPickerTitle")}
+              </legend>
+              <div role="radiogroup" aria-label={t("projects.build.artifactPickerTitle")} className="mt-1 flex flex-col gap-1">
+                {outcome.artifacts.map((a) => (
+                  <label key={a.relative_path} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="radio"
+                      name="default-artifact"
+                      value={a.file_name}
+                      checked={selectedArtifact === a.file_name}
+                      onChange={() => setSelectedArtifact(a.file_name)}
+                    />
+                    {a.file_name}
+                  </label>
+                ))}
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <Button variant="outline" size="sm" onClick={handleSaveDefaultArtifact}>
+                  {t("projects.build.saveDefaultArtifact")}
+                </Button>
+                {defaultArtifactSaved && (
+                  <span role="status" className="text-sm">
+                    {t("projects.build.defaultArtifactSaved")}
+                  </span>
+                )}
+              </div>
+            </fieldset>
           )}
 
           {logLines.length > 0 && (
