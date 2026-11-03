@@ -74,3 +74,29 @@ export function testServerConnection(
 export function acceptHostKey(host: string, port: number, fingerprint: string): Promise<void> {
   return invoke("accept_host_key", { host, port, fingerprint });
 }
+
+// ---------------------------------------------------------------------------
+// 首页服务器概览（ticket 12）
+// ---------------------------------------------------------------------------
+
+/** 一台服务器的最近成功部署时间（从未部署过为 null）。 */
+export type ServerLastDeploy = {
+  serverId: number;
+  lastDeployAt: string | null;
+};
+
+/** TCP 层可达性结果（真实探测，但不含 SSH 认证）。 */
+export type ServerReachability = {
+  reachable: boolean;
+  detail: string | null;
+};
+
+/** 每台已知服务器一行最近成功部署时间（首页服务器卡片）。 */
+export function listServerLastDeploys(): Promise<ServerLastDeploy[]> {
+  return invoke("list_server_last_deploys");
+}
+
+/** 对 host:port 做一次 TCP 可达性探测（首页加载时与手动"重新检测"）。 */
+export function checkServerReachable(host: string, port: number): Promise<ServerReachability> {
+  return invoke("check_server_reachable", { host, port });
+}

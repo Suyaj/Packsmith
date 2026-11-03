@@ -182,3 +182,89 @@ describe("首页：快速发起打包", () => {
     expect(screen.getByRole("link", { name: "去项目管理" })).toHaveAttribute("href", "/projects");
   });
 });
+
+describe("首页：服务器概览", () => {
+  const lastDeploys = [
+    { serverId: 1, lastDeployAt: "2026-11-03T10:00:00.000Z" },
+    { serverId: 2, lastDeployAt: null },
+  ];
+
+  function backendFor(reachable: (host: string) => boolean): Record<string, (args: unknown) => unknown> {
+    return {
+      list_build_history: () => [],
+      list_projects: () => projects,
+      list_servers: () => servers,
+      list_server_last_deploys: () => lastDeploys,
+      check_server_reachable: (args: unknown) => {
+        const { host } = args as { host: string };
+        return reachable(host)
+          ? { reachable: true, detail: null }
+          : { reachable: false, detail: "connection refused" };
+      },
+    };
+  }
+
+  it("每台服务器一张卡片：连接状态、最近部署时间，入口到服务器管理页", async () => {
+    mockBackend(backendFor((host) => host === "web-1"));
+
+    renderHome();
+
+    const card1 = await screen.findByTestId("server-card-1");
+    expect(card1).toHaveTextContent("web-1:22");
+    await waitFor(() => expect(card1).toHaveTextContent("连接正常"));
+    expect(card1).toHaveTextContent("最近部署");
+
+    const card2 = await screen.findByTestId("server-card-2");
+    expect(card2).toHaveTextContent("web-2:2222");
+    await waitFor(() => expect(card2).toHaveTextContent("无法连接"));
+    expect(card2).toHaveTextContent("从未部署");
+
+    expect(screen.getByRole("link", { name: "管理服务器" })).toHaveAttribute("href", "/servers");
+  });
+
+  it("首页加载时对每台服务器做真实的 TCP 可达性探测", async () => {
+    const backend = backendFor(() => true);
+    mockBackend(backend);
+
+    renderHome();
+
+    await screen.findByTestId("server-card-2");
+    expect(mockInvoke).toHaveBeenCalledWith("check_server_reachable", {
+      host: "web-1",
+      port: 22,
+    });
+    expect(mockInvoke).toHaveBeenCalledWith("check_server_reachable", {
+      host: "web-2",
+      port: 2222,
+    });
+  });
+
+  it("可手动重新检测连接状态", async () => {
+    let flip = false;
+    const backend = backendFor(() => flip);
+    mockBackend(backend);
+
+    renderHome();
+
+    const card1 = await screen.findByTestId("server-card-1");
+    await waitFor(() => expect(within(card1).getByText("无法连接")).toBeInTheDocument());
+
+    flip = true;
+    await userEvent.click(within(card1).getByRole("button", { name: "重新检测" }));
+
+    await waitFor(() => expect(within(card1).getByText("连接正常")).toBeInTheDocument());
+  });
+
+  it("没有服务器时展示空状态", async () => {
+    mockBackend({
+      list_build_history: () => [],
+      list_projects: () => projects,
+      list_servers: () => [],
+      list_server_last_deploys: () => [],
+    });
+
+    renderHome();
+
+    expect(await screen.findByText("暂无服务器")).toBeInTheDocument();
+  });
+});

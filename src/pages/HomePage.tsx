@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,13 @@ import {
 import BuildPanel from "@/components/BuildPanel";
 import { listProjects, type Project } from "@/lib/buildApi";
 import { listBuildHistory, type HistoryEntry } from "@/lib/historyApi";
+import {
+  checkServerReachable,
+  listServerLastDeploys,
+  listServers,
+  type Server,
+  type ServerReachability,
+} from "@/lib/serversApi";
 
 /** 首页最近打包记录条数（spec: 首页总览最近打包记录列表）。 */
 const RECENT_LIMIT = 5;
@@ -19,6 +26,9 @@ function formatTime(iso: string): string {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
 }
+
+/** 服务器卡片的连接状态：探测中，或一次探测结果。 */
+type ReachState = "checking" | ServerReachability;
 
 /**
  * 首页（spec）：总览 + 快捷入口，无独有功能。
@@ -32,6 +42,9 @@ function HomePage() {
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [quickProjectId, setQuickProjectId] = useState<string>("");
   const [buildProject, setBuildProject] = useState<Project | null>(null);
+  const [servers, setServers] = useState<Server[] | null>(null);
+  const [lastDeploys, setLastDeploys] = useState<Record<number, string | null>>({});
+  const [reach, setReach] = useState<Record<number, ReachState>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -49,10 +62,46 @@ function HomePage() {
       .catch(() => {
         if (!cancelled) setProjects([]);
       });
+    listServers()
+      .then((rows) => {
+        if (!cancelled) setServers(Array.isArray(rows) ? rows : []);
+      })
+      .catch(() => {
+        if (!cancelled) setServers([]);
+      });
+    listServerLastDeploys()
+      .then((rows) => {
+        if (cancelled || !Array.isArray(rows)) return;
+        setLastDeploys(Object.fromEntries(rows.map((r) => [r.serverId, r.lastDeployAt])));
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
   }, []);
+
+  /** 真实 TCP 可达性探测（页面加载时逐台触发，可手动重测）。 */
+  const probe = useCallback((server: Server) => {
+    setReach((prev) => ({ ...prev, [server.id]: "checking" }));
+    checkServerReachable(server.host, server.port)
+      .then((result) => {
+        setReach((prev) => ({ ...prev, [server.id]: result }));
+      })
+      .catch((err) => {
+        setReach((prev) => ({
+          ...prev,
+          [server.id]: {
+            reachable: false,
+            detail: err instanceof Error ? err.message : String(err),
+          },
+        }));
+      });
+  }, []);
+
+  useEffect(() => {
+    if (servers === null) return;
+    for (const server of servers) probe(server);
+  }, [servers, probe]);
 
   function startQuickBuild() {
     const project = (projects ?? []).find((p) => String(p.id) === quickProjectId) ?? null;
@@ -166,6 +215,78 @@ function HomePage() {
                 project={buildProject}
                 onClose={() => setBuildProject(null)}
               />
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="mt-4" data-testid="servers-overview-card">
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle>{t("home.serversOverview")}</CardTitle>
+          <Link to="/servers" className="text-sm text-muted-foreground hover:text-foreground">
+            {t("home.serversGoManage")}
+          </Link>
+        </CardHeader>
+        <CardContent>
+          {servers !== null && servers.length === 0 ? (
+            <p className="text-sm text-muted-foreground">{t("home.serversEmpty")}</p>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {(servers ?? []).map((server) => {
+                const state = reach[server.id] ?? "checking";
+                const lastDeployAt = lastDeploys[server.id] ?? null;
+                return (
+                  <div
+                    key={server.id}
+                    data-testid={`server-card-${server.id}`}
+                    className="rounded-md border p-3"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-medium">
+                        {server.host}:{server.port} — {server.username}
+                      </p>
+                      {state === "checking" ? (
+                        <span
+                          data-testid={`server-reach-${server.id}`}
+                          role="status"
+                          className="text-xs text-muted-foreground"
+                        >
+                          {t("home.serverChecking")}
+                        </span>
+                      ) : state.reachable ? (
+                        <span
+                          data-testid={`server-reach-${server.id}`}
+                          className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
+                        >
+                          {t("home.serverReachable")}
+                        </span>
+                      ) : (
+                        <span
+                          data-testid={`server-reach-${server.id}`}
+                          title={state.detail ?? undefined}
+                          className="rounded-full bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive"
+                        >
+                          {t("home.serverUnreachable")}
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {t("home.serverLastDeploy")}
+                      {lastDeployAt === null
+                        ? t("home.serverNeverDeployed")
+                        : `：${formatTime(lastDeployAt)}`}
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-2"
+                      onClick={() => probe(server)}
+                    >
+                      {t("home.serverCheck")}
+                    </Button>
+                  </div>
+                );
+              })}
             </div>
           )}
         </CardContent>
