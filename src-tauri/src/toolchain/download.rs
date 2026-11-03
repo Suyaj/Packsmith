@@ -123,7 +123,7 @@ where
         if attempt > 0 {
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
-        let mut response = if attempt == 0 || received == 0 {
+        let response = if attempt == 0 || received == 0 {
             if received > 0 {
                 received = 0;
                 file.set_len(0).await?;
