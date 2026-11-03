@@ -101,26 +101,58 @@ pub struct PreparedWorkspace {
 
 /// 实时拉取 `url` 的远端分支列表（仅 `refs/heads/*`，前缀剥除，不含 HEAD
 /// 与 tag）。`url` 也接受本地路径（本地导入的项目走同一通道）。
-pub fn list_branches(url: &str) -> Result<Vec<String>, ProjectError> {
+///
+/// 认证 (ticket 13)：`creds` 为加密库中配置的 Git 账号时，远程要求认证即
+/// 供给 UserPass 凭据；`None` 保持匿名。SSH 协议 URL 一律
+/// [`ProjectError::SshNotSupported`]；Auth 类失败映射为
+/// [`ProjectError::GitAuth`]（引导去 设置 → Git 账号）。
+pub fn list_branches(
+    url: &str,
+    creds: Option<&crate::git_auth::GitCredentials>,
+) -> Result<Vec<String>, ProjectError> {
+    if crate::git_auth::is_ssh_url(url) {
+        return Err(ProjectError::SshNotSupported(url.to_string()));
+    }
     // git2 需要一个仓库来创建匿名远端；开一个一次性的空 bare 仓库当跳板，
     // 用完即删。
     let scratch = std::env::temp_dir().join(format!("packsmith-lsremote-{}", unique_suffix()));
     let repo = git2::Repository::init_bare(&scratch)
         .map_err(|e| ProjectError::BranchListing(e.message().to_string()))?;
-    let result = list_branches_via(&repo, url);
+    let result = list_branches_via(&repo, url, creds);
     let _ = std::fs::remove_dir_all(&scratch);
     result
 }
 
-fn list_branches_via(repo: &git2::Repository, url: &str) -> Result<Vec<String>, ProjectError> {
+fn list_branches_via(
+    repo: &git2::Repository,
+    url: &str,
+    creds: Option<&crate::git_auth::GitCredentials>,
+) -> Result<Vec<String>, ProjectError> {
     let list = || -> Result<Vec<String>, ProjectError> {
         // 匿名远端：不写入仓库配置，等价于 `git ls-remote <url>`。
         let mut remote = repo
             .remote_anonymous(url)
             .map_err(|e| ProjectError::BranchListing(e.message().to_string()))?;
+        let mut callbacks = git2::RemoteCallbacks::new();
+        if let Some(creds) = creds {
+            let attempt = crate::git_auth::AuthAttempt::new();
+            let creds = creds.clone();
+            // 凭据被拒时 libgit2 会再次回调；AuthAttempt 第二次起报错中止。
+            callbacks.credentials(move |url, username, allowed| {
+                attempt.try_credential(&creds, Some(url), username, allowed)
+            });
+        }
         let connection = remote
-            .connect_auth(Direction::Fetch, None, None)
-            .map_err(|e| ProjectError::BranchListing(e.message().to_string()))?;
+            .connect_auth(Direction::Fetch, Some(callbacks), None)
+            .map_err(|e| {
+                // 认证失败映射为 git_auth_failed（ticket 13）；其余保持
+                // BranchListing 语义不变。
+                if e.code() == git2::ErrorCode::Auth {
+                    projects::map_git_error(e)
+                } else {
+                    ProjectError::BranchListing(e.message().to_string())
+                }
+            })?;
         let heads = connection
             .list()
             .map_err(|e| ProjectError::BranchListing(e.message().to_string()))?;
@@ -198,7 +230,11 @@ pub fn prepare_workspace_in(
     let dest = temp_workspace_path(&project.name, root);
     std::fs::create_dir_all(&dest)?;
 
-    if let Err(e) = projects::clone_repo(&url, &dest, Some(branch), on_progress, cancel) {
+    // 打包 clone 同样使用已配置的 Git 账号（ticket 13）；查找失败按匿名。
+    let creds = crate::git_auth::credentials_from_store(store);
+    if let Err(e) =
+        projects::clone_repo(&url, &dest, Some(branch), on_progress, cancel, creds.as_ref())
+    {
         // 失败不留残留（验收：临时工作区被清理）。
         let _ = std::fs::remove_dir_all(&dest);
         return Err(e);

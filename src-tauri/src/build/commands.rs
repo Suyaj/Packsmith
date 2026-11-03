@@ -72,9 +72,14 @@ pub async fn list_remote_branches(
             projects::get(&store, project_id)?.ok_or(ProjectError::ProjectNotFound(project_id))?;
         project.url.clone().unwrap_or_else(|| project.path.clone())
     };
+    // 已配置的 Git 账号随请求带入（ticket 13）；查找失败按匿名访问。
+    let creds = {
+        let store = app.state::<Store>();
+        crate::git_auth::credentials_from_store(&store)
+    };
 
     // ls-remote 可能等网络；放到阻塞线程池，不占主线程。
-    tauri::async_runtime::spawn_blocking(move || build::list_branches(&url))
+    tauri::async_runtime::spawn_blocking(move || build::list_branches(&url, creds.as_ref()))
         .await
         .map_err(|e| ApiError::raw("branch_listing_failed", e.to_string()))?
         .map_err(Into::into)
