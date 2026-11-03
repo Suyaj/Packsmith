@@ -5,5 +5,6 @@
 //! 部署目标 (Deployment Target), not here (see GLOSSARY.md).
 
 pub mod commands;
+pub mod reachability;
 pub mod repo;
 pub mod ssh;
