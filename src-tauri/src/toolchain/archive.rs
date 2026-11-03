@@ -69,6 +69,19 @@ fn dest_path_for(
     Ok(Some(dest_root.join(rel)))
 }
 
+/// 条目带 unix 权限位时原样落盘（仅保留权限位，忽略文件类型位）。
+/// 无模式信息（None）的条目保持默认行为。Windows 上无需处理。
+fn apply_unix_mode(target: &Path, unix_mode: Option<u32>) -> io::Result<()> {
+    #[cfg(unix)]
+    if let Some(mode) = unix_mode {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(target, std::fs::Permissions::from_mode(mode & 0o777))?;
+    }
+    #[cfg(not(unix))]
+    let _ = (target, unix_mode);
+    Ok(())
+}
+
 fn extract_zip(archive_path: &Path, dest_root: &Path, strip_top: bool) -> io::Result<()> {
     let file = std::fs::File::open(archive_path)?;
     let mut archive = zip::ZipArchive::new(file)?;
@@ -83,10 +96,14 @@ fn extract_zip(archive_path: &Path, dest_root: &Path, strip_top: bool) -> io::Re
                 if entry.is_dir() {
                     std::fs::create_dir_all(&target)?;
                 } else {
+                    // unix 条目带权限位（官方 mvnd/JDK zip 的可执行文件为 0755）；
+                    // 无模式信息的包（Windows 打常见）落默认 0644，由安装校验自愈。
+                    let unix_mode = entry.unix_mode();
                     if let Some(parent) = target.parent() {
                         std::fs::create_dir_all(parent)?;
                     }
                     std::io::copy(&mut entry, &mut std::fs::File::create(&target)?)?;
+                    apply_unix_mode(&target, unix_mode)?;
                 }
             }
             None => {
@@ -153,6 +170,21 @@ mod tests {
         zip.finish().unwrap();
     }
 
+    /// 可选指定条目 unix_mode 的 zip 夹具（None = 无模式信息，Windows 打包常见）。
+    fn write_zip_with_modes(path: &Path, entries: &[(&str, &str, Option<u32>)]) {
+        let file = std::fs::File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        for (name, content, mode) in entries {
+            let mut options = zip::write::SimpleFileOptions::default();
+            if let Some(mode) = mode {
+                options = options.unix_permissions(*mode);
+            }
+            zip.start_file(*name, options).unwrap();
+            std::io::Write::write_all(&mut zip, content.as_bytes()).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
     #[test]
     fn zip_剥离顶层目录并还原结构() {
         let dir = temp_dir("zip-strip");
@@ -177,6 +209,35 @@ mod tests {
             "hello"
         );
         assert!(!dest.join("maven-mvnd-1.0.6-darwin-aarch64").exists());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn zip_解压保留条目unix_mode执行位() {
+        // 回归：mvnd/JDK 官方 zip 带 unix_mode，extract_zip 曾丢弃导致 0644
+        // → spawn Permission denied (os error 13)。
+        let dir = temp_dir("zip-exec-bit");
+        let archive = dir.join("mvnd.zip");
+        write_zip_with_modes(
+            &archive,
+            &[
+                ("maven-mvnd-1.0.6-darwin-aarch64/", "", None),
+                (
+                    "maven-mvnd-1.0.6-darwin-aarch64/bin/mvnd",
+                    "#!/bin/sh",
+                    Some(0o755),
+                ),
+            ],
+        );
+        let dest = dir.join("tools/mvnd");
+        extract_archive(&archive, &dest, ArchiveFormat::Zip, true).unwrap();
+
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(dest.join("bin/mvnd"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o111, 0o111, "执行位应保留，实际 mode={mode:o}");
     }
 
     #[test]
