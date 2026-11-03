@@ -1,10 +1,19 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { resources } from "@/i18n";
 import "@/i18n";
+
+// 页面骨架测试不触达后端 IPC；数据流在各自页面的测试里 mock。
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(async (cmd: string) => {
+    if (cmd === "list_projects") return [];
+    return null;
+  }),
+  Channel: vi.fn(() => ({ onmessage: null })),
+}));
 
 function renderApp(initialPath: string) {
   return render(
