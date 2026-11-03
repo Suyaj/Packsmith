@@ -94,6 +94,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
         );",
     },
+    Migration {
+        version: 8,
+        name: "ticket 11: 关窗行为设置默认值 (close_window_behavior)",
+        sql: "INSERT OR IGNORE INTO app_meta (key, value) VALUES ('close_window_behavior', 'minimize');",
+    },
 ];
 
 pub(crate) const LATEST_SCHEMA_VERSION: i32 = MIGRATIONS[MIGRATIONS.len() - 1].version;
