@@ -14,6 +14,8 @@ export type Target = {
   stopCommands: string;
   /** 构建成功后自动连锁部署（ticket 10，默认关）。 */
   autoDeploy: boolean;
+  /** 上次该目标部署选择的构件文件名（ticket 17，部署对话框默认选中项）。 */
+  lastArtifact: string | null;
 };
 
 export type TargetInput = {
@@ -57,4 +59,9 @@ export function updateDeploymentTarget(
 
 export function deleteDeploymentTarget(id: number): Promise<boolean> {
   return invoke("delete_deployment_target", { id });
+}
+
+/** 记住某目标上次部署选择的构件（ticket 17，多产物时按目标默认选中）。 */
+export function setTargetLastArtifact(id: number, fileName: string): Promise<boolean> {
+  return invoke("set_target_last_artifact", { id, fileName });
 }

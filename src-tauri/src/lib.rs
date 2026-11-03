@@ -56,6 +56,7 @@ pub fn run() {
             targets::commands::update_deployment_target,
             targets::commands::delete_deployment_target,
             targets::commands::set_target_auto_deploy,
+            targets::commands::set_target_last_artifact,
             deploy::commands::start_deploy,
             deploy::commands::cancel_deploy,
             deploy::commands::run_start_group,

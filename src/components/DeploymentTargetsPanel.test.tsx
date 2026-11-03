@@ -43,6 +43,7 @@ const target: Target = {
   startCommands: "cd /home/app\nsh start.sh start",
   stopCommands: "sh start.sh stop",
   autoDeploy: false,
+  lastArtifact: null,
 };
 
 function mockBackend(overrides: Record<string, unknown> = {}) {

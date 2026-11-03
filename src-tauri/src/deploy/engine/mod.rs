@@ -1,8 +1,9 @@
 //! 部署执行编排 (deploy orchestration, ticket 10).
 //!
 //! For each 部署目标 (deployment target) in plan order:
-//! 1. **上传** — SFTP the build artifact from the 产物库 to the target's
-//!    upload dir under its **original file name** (overwrite).
+//! 1. **上传** — SFTP that target's own chosen build artifact (ticket 17
+//!    一一对应上传) from the 产物库 to the target's upload dir under its
+//!    **original file name** (overwrite).
 //! 2. **停止** — run the 停止命令组 as one serial shell unit.
 //! 3. 停止成功 → **启动** — run the 启动命令组 the same way.
 //!
@@ -109,7 +110,9 @@ pub struct ConnInfo {
     pub fingerprint: Option<String>,
 }
 
-/// One per-target job: where to connect and what to run.
+/// One per-target job: where to connect, what to upload and what to run.
+/// `artifact` is the per-target file choice (ticket 17 一一对应上传): targets
+/// without one skip the upload phase (单独执行启动命令组).
 #[derive(Debug, Clone)]
 pub struct TargetJob {
     pub target_id: i64,
@@ -117,6 +120,7 @@ pub struct TargetJob {
     pub stop_commands: Vec<String>,
     pub start_commands: Vec<String>,
     pub conn: ConnInfo,
+    pub artifact: Option<ArtifactRef>,
 }
 
 /// The artifact to upload (from the 产物库), under its original file name.
@@ -126,11 +130,11 @@ pub struct ArtifactRef {
     pub file_name: String,
 }
 
-/// What [`run_deploy`] should do. `artifact: None` + `run_stop: false` is the
-/// "单独执行启动命令组" (start-group-only) operation.
+/// What [`run_deploy`] should do. A target whose [`TargetJob::artifact`] is
+/// `None` skips the upload; `run_stop: false` with no artifacts anywhere is
+/// the "单独执行启动命令组" (start-group-only) operation.
 #[derive(Debug, Clone)]
 pub struct DeployPlan {
-    pub artifact: Option<ArtifactRef>,
     pub run_stop: bool,
     pub targets: Vec<TargetJob>,
 }
@@ -317,8 +321,9 @@ where
             }
         };
 
-        // Phase 1: upload (original file name, overwrite).
-        if let Some(artifact) = &plan.artifact {
+        // Phase 1: upload this target's own chosen file (original file name,
+        // overwrite). Targets without an assignment skip the upload.
+        if let Some(artifact) = &job.artifact {
             sink(DeployEvent::Phase {
                 target_id: job.target_id,
                 phase: "upload",

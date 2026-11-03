@@ -284,8 +284,8 @@
   },
   "deploy": {
     "title": "部署 — {{project}}",
-    "artifactTitle": "选择构件",
-    "targetTitle": "选择部署目标（可多选）",
+    "artifactLabel": "上传构件",
+    "targetTitle": "选择部署目标（每个目标单独选择要上传的构件）",
     "targetLabel": "部署目标 #{{id}}",
     "noTargets": "该项目还没有部署目标，请先在项目页配置",
     "noArtifacts": "该构建没有入库构件",
@@ -315,6 +315,15 @@
     "autoRunning": "准备中…",
     "autoRunningTitle": "自动连锁部署进行中（{{summary}}）",
     "autoFinished": "自动连锁部署完成（{{summary}}）",
-    "autoDismiss": "知道了"
+    "autoDismiss": "知道了",
+    "errors": {
+      "no_targets_selected": "请先选择部署目标",
+      "duplicate_target": "每个部署目标只能出现一次",
+      "artifact_not_found": "所选构件不在本次构建的产物列表中：{{detail}}",
+      "build_failed": "该构建未成功，无法部署",
+      "artifacts_dir_missing": "该构建没有入库构件",
+      "invalid_target": "部署目标无效：{{detail}}",
+      "missing_server": "找不到该部署目标对应的服务器"
+    }
   }
 }

@@ -31,6 +31,9 @@ pub struct Target {
     /// 构建成功后自动连锁部署 (auto-chain deploy after a successful build) —
     /// default OFF (spec: 默认关).
     pub auto_deploy: bool,
+    /// 上次该目标部署选择的构件文件名 (ticket 17: 多产物时按目标记住上次
+    /// 选择); `None` = 尚未用该目标部署过.
+    pub last_artifact: Option<String>,
 }
 
 /// Splits a 命令组 (command group) into its commands: one per line, each
@@ -49,7 +52,7 @@ pub fn normalize_commands(text: &str) -> String {
 }
 
 const SELECT_COLUMNS: &str =
-    "id, project_id, server_id, upload_dir, start_commands, stop_commands, auto_deploy";
+    "id, project_id, server_id, upload_dir, start_commands, stop_commands, auto_deploy, last_artifact";
 
 fn row_to_target(row: &rusqlite::Row<'_>) -> rusqlite::Result<Target> {
     Ok(Target {
@@ -60,6 +63,7 @@ fn row_to_target(row: &rusqlite::Row<'_>) -> rusqlite::Result<Target> {
         start_commands: row.get("start_commands")?,
         stop_commands: row.get("stop_commands")?,
         auto_deploy: row.get::<_, i64>("auto_deploy")? != 0,
+        last_artifact: row.get("last_artifact")?,
     })
 }
 
@@ -95,6 +99,7 @@ pub fn create(store: &Store, target: &NewTarget) -> Result<Target, RepoError> {
         start_commands: normalize_commands(&target.start_commands),
         stop_commands: normalize_commands(&target.stop_commands),
         auto_deploy: false,
+        last_artifact: None,
     };
     let id = store.with(|conn| {
         conn.execute(
@@ -117,7 +122,8 @@ pub fn create(store: &Store, target: &NewTarget) -> Result<Target, RepoError> {
 /// Replaces all fields of the target with the given id. The row must exist.
 ///
 /// Same validation as [`create`]; the pair uniqueness check ignores the row
-/// being updated itself.
+/// being updated itself. `last_artifact` is deliberately **not** touched
+/// (ticket 17): editing a target's commands must not forget its last choice.
 pub fn update(store: &Store, target: &Target) -> Result<Target, RepoError> {
     check_references(store, target.project_id, target.server_id)?;
     if binding_exists(store, target.project_id, target.server_id, Some(target.id))? {
@@ -178,6 +184,19 @@ pub fn set_auto_deploy(store: &Store, id: i64, enabled: bool) -> Result<bool, Re
         conn.execute(
             "UPDATE deployment_targets SET auto_deploy = ?1 WHERE id = ?2",
             params![enabled as i64, id],
+        )
+    })?;
+    Ok(changed > 0)
+}
+
+/// Remembers the artifact file name this target was last deployed with
+/// (ticket 17: 多产物时按目标记住上次选择，部署对话框的默认选中项).
+/// Returns whether the target exists.
+pub fn set_last_artifact(store: &Store, id: i64, file_name: &str) -> Result<bool, RepoError> {
+    let changed = store.with(|conn| {
+        conn.execute(
+            "UPDATE deployment_targets SET last_artifact = ?1 WHERE id = ?2",
+            params![file_name.trim(), id],
         )
     })?;
     Ok(changed > 0)

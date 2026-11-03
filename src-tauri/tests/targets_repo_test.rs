@@ -106,6 +106,7 @@ fn created_target_round_trips_all_fields() {
             start_commands: "cd /home/app\nsh start.sh start".to_string(),
             stop_commands: "sh start.sh stop".to_string(),
             auto_deploy: false,
+            last_artifact: None,
         }
     );
 }
@@ -192,6 +193,7 @@ fn update_replaces_fields_and_keeps_id() {
             start_commands: "sh run.sh".to_string(),
             stop_commands: "".to_string(),
             auto_deploy: false,
+            last_artifact: None,
         },
     )
     .unwrap();
@@ -217,6 +219,7 @@ fn update_unknown_id_fails() {
             start_commands: String::new(),
             stop_commands: String::new(),
             auto_deploy: false,
+            last_artifact: None,
         },
     );
     assert!(result.is_err());

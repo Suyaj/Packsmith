@@ -1,6 +1,6 @@
-// 部署对话框（ticket 10）：从一条构建历史选择构件与部署目标（多选），
-// 依次部署；展示各目标阶段状态与输出快照；停止失败中止重启并提供
-// “单独执行启动命令组”；部署进行中可取消。
+// 部署对话框（ticket 10 / 17）：从一条构建历史逐个部署目标选择要上传的
+// 构件（一一对应上传），依次部署；展示各目标阶段状态与输出快照；停止失败
+// 中止重启并提供“单独执行启动命令组”；部署进行中可取消。
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -13,11 +13,16 @@ import {
   startDeploy,
   type AutoDeployMessage,
   type DeployPhase,
+  type TargetAssignment,
   type TargetStatus,
 } from "@/lib/deployApi";
 import { listBuildArtifacts, type ArtifactFile } from "@/lib/historyApi";
 import { listServers } from "@/lib/serversApi";
-import { listDeploymentTargets, type Target } from "@/lib/targetsApi";
+import {
+  listDeploymentTargets,
+  setTargetLastArtifact,
+  type Target,
+} from "@/lib/targetsApi";
 import { serverLabel } from "./DeploymentTargetsPanel";
 
 /** 每个目标的实时展示状态：状态 + 各阶段输出快照 + 上传进度。 */
@@ -44,6 +49,18 @@ function backendMessage(e: unknown): string {
   return String(e);
 }
 
+/** 后端错误 → 中文文案：按稳定 code 选 i18n，无对应文案时回退原始 detail。 */
+function startErrorMessage(e: unknown, t: (key: string, opts?: Record<string, unknown>) => string): string {
+  const detail = backendMessage(e);
+  const code =
+    typeof e === "object" && e !== null && "code" in e
+      ? String((e as { code: unknown }).code)
+      : null;
+  return code
+    ? t(`deploy.errors.${code}`, { detail, defaultValue: t("deploy.deployFailed", { detail }) })
+    : t("deploy.deployFailed", { detail });
+}
+
 function DeployDialog({
   projectId,
   projectName,
@@ -63,7 +80,8 @@ function DeployDialog({
   const [targets, setTargets] = useState<Target[] | null>(null);
   const [serverLabels, setServerLabels] = useState<Map<number, string>>(new Map());
   const [artifacts, setArtifacts] = useState<ArtifactFile[] | null>(null);
-  const [selectedArtifact, setSelectedArtifact] = useState<string | null>(null);
+  // 每个目标各自选中的构件文件名（ticket 17 一一对应上传）。
+  const [selectedFiles, setSelectedFiles] = useState<Map<number, string>>(new Map());
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [views, setViews] = useState<Map<number, TargetView>>(new Map());
   const [running, setRunning] = useState(false);
@@ -83,11 +101,22 @@ function DeployDialog({
       setServerLabels(new Map(servers.map((s) => [s.id, serverLabel(s)])));
       setArtifacts(artifactList);
       const names = artifactList.map((a) => a.file_name);
-      const preselect =
-        defaultArtifact && names.includes(defaultArtifact)
-          ? defaultArtifact
-          : (names[0] ?? null);
-      setSelectedArtifact(preselect);
+      // 每个目标的默认构件：单产物自动选中；多产物优先记住的上次选择
+      // （ticket 17 per-target last choice），否则退回项目默认构件。
+      const defaults = new Map<number, string>();
+      for (const target of targetList) {
+        const preferred =
+          (target.lastArtifact && names.includes(target.lastArtifact)
+            ? target.lastArtifact
+            : null) ??
+          (defaultArtifact && names.includes(defaultArtifact)
+            ? defaultArtifact
+            : null) ??
+          names[0] ??
+          null;
+        if (preferred) defaults.set(target.id, preferred);
+      }
+      setSelectedFiles(defaults);
       setViews(new Map(targetList.map((target) => [target.id, { ...INITIAL_VIEW, outputs: {} }])));
       setLoadError(null);
     } catch (e) {
@@ -157,15 +186,23 @@ function DeployDialog({
   };
 
   const handleStart = async () => {
-    if (!selectedArtifact || selectedIds.length === 0) return;
+    // 每个选中的目标必须有自己的构件选择；提交一一对应的 assignments。
+    const assignments: TargetAssignment[] = selectedIds
+      .map((id) => ({ targetId: id, fileName: selectedFiles.get(id) ?? "" }))
+      .filter((a) => a.fileName !== "");
+    if (assignments.length !== selectedIds.length) return;
     setStartError(null);
     setRunning(true);
+    // 记住每个目标本次的选择（ticket 17），失败不阻塞部署。
+    await Promise.allSettled(
+      assignments.map((a) => setTargetLastArtifact(a.targetId, a.fileName)),
+    );
     const channel = new Channel<AutoDeployMessage>();
     channel.onmessage = handleMessage;
     try {
-      await startDeploy(historyId, selectedArtifact, selectedIds, channel);
+      await startDeploy(historyId, assignments, channel);
     } catch (e) {
-      setStartError(t("deploy.deployFailed", { detail: backendMessage(e) }));
+      setStartError(startErrorMessage(e, t));
     } finally {
       setRunning(false);
     }
@@ -214,26 +251,6 @@ function DeployDialog({
         {artifacts !== null && artifacts.length === 0 && (
           <p className="text-sm text-muted-foreground">{t("deploy.noArtifacts")}</p>
         )}
-        {artifacts !== null && artifacts.length > 0 && (
-          <fieldset>
-            <legend className="text-sm font-medium">{t("deploy.artifactTitle")}</legend>
-            <div role="radiogroup" aria-label={t("deploy.artifactTitle")} className="mt-1 flex flex-col gap-1">
-              {artifacts.map((artifact) => (
-                <label key={artifact.file_name} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="radio"
-                    name="deploy-artifact"
-                    value={artifact.file_name}
-                    checked={selectedArtifact === artifact.file_name}
-                    disabled={running}
-                    onChange={() => setSelectedArtifact(artifact.file_name)}
-                  />
-                  <span className="font-mono">{artifact.file_name}</span>
-                </label>
-              ))}
-            </div>
-          </fieldset>
-        )}
 
         <fieldset>
           <legend className="text-sm font-medium">{t("deploy.targetTitle")}</legend>
@@ -241,12 +258,9 @@ function DeployDialog({
             <p className="text-sm text-muted-foreground">{t("deploy.noTargets")}</p>
           )}
           <div className="mt-1 flex flex-col gap-2">
-            {(targets ?? []).map((target) => {
-              return (
-                <label
-                  key={target.id}
-                  className="flex items-center gap-2 text-sm"
-                >
+            {(targets ?? []).map((target) => (
+              <div key={target.id} className="flex flex-col gap-1 rounded-md border p-2">
+                <label className="flex items-center gap-2 text-sm">
                   <input
                     type="checkbox"
                     data-testid={`deploy-target-${target.id}`}
@@ -266,8 +280,28 @@ function DeployDialog({
                     <span className="text-muted-foreground"> · {target.uploadDir}</span>
                   </span>
                 </label>
-              );
-            })}
+                {artifacts !== null && artifacts.length > 0 && (
+                  <label className="flex items-center gap-2 text-sm">
+                    <span className="text-muted-foreground">{t("deploy.artifactLabel")}</span>
+                    <select
+                      data-testid={`deploy-artifact-select-${target.id}`}
+                      value={selectedFiles.get(target.id) ?? ""}
+                      disabled={running}
+                      onChange={(e) => {
+                        const fileName = e.target.value;
+                        setSelectedFiles((prev) => new Map(prev).set(target.id, fileName));
+                      }}
+                    >
+                      {artifacts.map((artifact) => (
+                        <option key={artifact.file_name} value={artifact.file_name}>
+                          {artifact.file_name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+              </div>
+            ))}
           </div>
         </fieldset>
 
@@ -281,7 +315,13 @@ function DeployDialog({
           <Button
             data-testid="deploy-submit"
             onClick={() => void handleStart()}
-            disabled={running || !selectedArtifact || selectedIds.length === 0}
+            disabled={
+              running ||
+              artifacts === null ||
+              artifacts.length === 0 ||
+              selectedIds.length === 0 ||
+              selectedIds.some((id) => !selectedFiles.get(id))
+            }
           >
             {t("deploy.submit")}
           </Button>

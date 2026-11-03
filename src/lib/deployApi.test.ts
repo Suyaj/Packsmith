@@ -26,15 +26,24 @@ beforeEach(() => {
 });
 
 describe("deployApi", () => {
-  it("start_deploy 携带历史 id、原文件名与目标列表", async () => {
+  it("start_deploy 携带历史 id 与逐目标构件 assignments（一一对应上传）", async () => {
     invokeMock.mockResolvedValue({ cancelled: false, targets: [] });
     const onEvent = { onmessage: null } as never;
-    await startDeploy(7, "app-1.0.jar", [1, 2], onEvent);
+    await startDeploy(
+      7,
+      [
+        { targetId: 1, fileName: "app-1.0.jar" },
+        { targetId: 2, fileName: "other-1.0.jar" },
+      ],
+      onEvent,
+    );
 
     expect(invokeMock).toHaveBeenCalledWith("start_deploy", {
       historyId: 7,
-      fileName: "app-1.0.jar",
-      targetIds: [1, 2],
+      assignments: [
+        { targetId: 1, fileName: "app-1.0.jar" },
+        { targetId: 2, fileName: "other-1.0.jar" },
+      ],
       onEvent,
     });
   });

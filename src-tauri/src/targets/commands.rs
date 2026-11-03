@@ -18,6 +18,8 @@ pub struct TargetDto {
     pub stop_commands: String,
     /// 构建成功后自动连锁部署 (ticket 10, 默认关).
     pub auto_deploy: bool,
+    /// 上次该目标部署选择的构件 (ticket 17, 部署对话框默认选中项).
+    pub last_artifact: Option<String>,
 }
 
 impl From<&Target> for TargetDto {
@@ -30,6 +32,7 @@ impl From<&Target> for TargetDto {
             start_commands: t.start_commands.clone(),
             stop_commands: t.stop_commands.clone(),
             auto_deploy: t.auto_deploy,
+            last_artifact: t.last_artifact.clone(),
         }
     }
 }
@@ -76,6 +79,10 @@ pub fn update_deployment_target(
     stop_commands: String,
     auto_deploy: bool,
 ) -> Result<TargetDto, String> {
+    // 编辑目标不得丢失“上次选择的构件”（repo::update 不写该列，这里回填）。
+    let last_artifact = repo::get(&store, id)
+        .map_err(|e| e.to_string())?
+        .and_then(|t| t.last_artifact);
     let target = Target {
         id,
         project_id,
@@ -84,6 +91,7 @@ pub fn update_deployment_target(
         start_commands,
         stop_commands,
         auto_deploy,
+        last_artifact,
     };
     repo::update(&store, &target)
         .map_err(|e| e.to_string())
@@ -103,4 +111,14 @@ pub fn set_target_auto_deploy(
     enabled: bool,
 ) -> Result<bool, String> {
     repo::set_auto_deploy(&store, id, enabled).map_err(|e| e.to_string())
+}
+
+/// 记住某目标上次部署选择的构件（ticket 17 一一对应上传）。返回目标是否存在。
+#[tauri::command]
+pub fn set_target_last_artifact(
+    store: State<'_, Store>,
+    id: i64,
+    file_name: String,
+) -> Result<bool, String> {
+    repo::set_last_artifact(&store, id, &file_name).map_err(|e| e.to_string())
 }

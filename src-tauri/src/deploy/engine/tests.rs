@@ -117,14 +117,29 @@ fn job(id: i64, upload_dir: &str, stop: &str, start: &str) -> TargetJob {
         stop_commands: super::split_command_group(stop),
         start_commands: super::split_command_group(start),
         conn: conn(id),
+        artifact: None,
     }
 }
 
+fn job_with_artifact(id: i64, upload_dir: &str, artifact: ArtifactRef) -> TargetJob {
+    TargetJob {
+        artifact: Some(artifact),
+        ..job(id, upload_dir, "sh stop", "sh start")
+    }
+}
+
+/// Attaches `artifact` to every target job (the pre-ticket-17 one-file-to-all
+/// shape, still used by auto-chain).
 fn plan(artifact: Option<ArtifactRef>, run_stop: bool, targets: Vec<TargetJob>) -> DeployPlan {
     DeployPlan {
-        artifact,
         run_stop,
-        targets,
+        targets: targets
+            .into_iter()
+            .map(|mut job| {
+                job.artifact = artifact.clone();
+                job
+            })
+            .collect(),
     }
 }
 
@@ -254,6 +269,82 @@ async fn uploads_artifact_with_original_filename_to_upload_dir() {
     assert_eq!(uploads[0].file_name, "app-service-1.0.jar");
     assert_eq!(uploads[0].bytes, b"jar-bytes");
     assert_eq!(summary.targets[0].status.as_str(), "success");
+}
+
+#[tokio::test]
+async fn per_target_artifacts_upload_distinct_files_to_their_targets() {
+    // ticket 17 一一对应上传: each target uploads exactly its own chosen
+    // file; files no target selected are never uploaded.
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a.jar");
+    let b = dir.path().join("b.jar");
+    let c = dir.path().join("c.jar");
+    std::fs::write(&a, b"a-bytes").unwrap();
+    std::fs::write(&b, b"b-bytes").unwrap();
+    std::fs::write(&c, b"c-bytes-never-selected").unwrap();
+
+    let (factory, mocks) = make_factory(vec![], vec![]);
+    let summary = run(
+        DeployPlan {
+            run_stop: true,
+            targets: vec![
+                job_with_artifact(1, "/srv/one", artifact(&a)),
+                job_with_artifact(2, "/srv/two", artifact(&b)),
+            ],
+        },
+        factory,
+    )
+    .await;
+
+    assert!(
+        summary
+            .targets
+            .iter()
+            .all(|o| o.status.as_str() == "success")
+    );
+    let map = mocks.lock().unwrap();
+    // 上传调用集合 = 选中集合: exactly one upload per target, of its own file.
+    let uploads_one = map.get(&1).unwrap().uploads.lock().unwrap();
+    assert_eq!(uploads_one.len(), 1);
+    assert_eq!(uploads_one[0].remote_dir, "/srv/one");
+    assert_eq!(uploads_one[0].file_name, "a.jar");
+    assert_eq!(uploads_one[0].bytes, b"a-bytes");
+    let uploads_two = map.get(&2).unwrap().uploads.lock().unwrap();
+    assert_eq!(uploads_two.len(), 1);
+    assert_eq!(uploads_two[0].file_name, "b.jar");
+    assert_eq!(uploads_two[0].bytes, b"b-bytes");
+    // c.jar was selected by nobody: it must not appear anywhere.
+    for uploads in [&uploads_one, &uploads_two] {
+        assert!(
+            uploads.iter().all(|u| u.file_name != "c.jar"),
+            "unselected artifact must never be uploaded"
+        );
+    }
+}
+
+#[tokio::test]
+async fn mixed_plan_uploads_only_targets_with_an_assignment() {
+    // A target without an artifact (e.g. 单独执行启动命令组) skips the upload
+    // phase while its assigned sibling still uploads.
+    let (_dir, path) = tmp_artifact("a.jar", b"x");
+    let (factory, mocks) = make_factory(vec![], vec![]);
+    let summary = run(
+        DeployPlan {
+            run_stop: false,
+            targets: vec![
+                job_with_artifact(1, "/srv/one", artifact(&path)),
+                job(2, "/srv/two", "sh stop-two", "sh start-two"),
+            ],
+        },
+        factory,
+    )
+    .await;
+
+    assert_eq!(summary.targets[0].status.as_str(), "success");
+    assert_eq!(summary.targets[1].status.as_str(), "success");
+    let map = mocks.lock().unwrap();
+    assert_eq!(map.get(&1).unwrap().uploads.lock().unwrap().len(), 1);
+    assert!(map.get(&2).unwrap().uploads.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
