@@ -4,7 +4,7 @@
 
 **Blocked by:** 03, 05
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] 分支列表为实时拉取（远程新建分支可见），默认选中该项目上次用的分支
 - [ ] 临时工作区自动创建，指定分支代码完整

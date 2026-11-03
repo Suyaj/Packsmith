@@ -4,7 +4,7 @@
 
 **Blocked by:** 07
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] 托盘图标常驻，菜单"打开/退出"均有效
 - [ ] 关窗行为随设置生效：默认进托盘不退出；选"退出"则真退出

@@ -4,7 +4,7 @@
 
 **Blocked by:** None（can start immediately）
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] `tauri dev` 启动，窗口正常显示
 - [ ] 四个页面可互相导航，每页有标题与空状态

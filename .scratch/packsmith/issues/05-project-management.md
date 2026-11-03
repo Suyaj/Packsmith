@@ -4,7 +4,7 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] 填 URL clone 成功，项目出现在列表，磁盘上有对应目录
 - [ ] 导入本地路径成功，项目出现在列表

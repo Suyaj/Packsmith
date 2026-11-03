@@ -4,7 +4,7 @@
 
 **Blocked by:** 06
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] Maven 项目构建成功，日志完整可查看
 - [ ] 执行只用托管工具链；依赖下载/读取只发生在 `<appdata>/m2-repo`

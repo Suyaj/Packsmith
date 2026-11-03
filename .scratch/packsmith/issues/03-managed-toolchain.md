@@ -4,7 +4,7 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] 本机已有工具时显示"已检测"
 - [ ] 缺失项一键下载成功，状态变"已托管"

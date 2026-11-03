@@ -4,7 +4,7 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] 服务器 CRUD 完整，重启应用后列表仍在
 - [ ] 连接测试成功显示成功；错误主机/凭据显示具体失败原因

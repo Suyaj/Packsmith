@@ -4,7 +4,7 @@
 
 **Blocked by:** 08, 10
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] 最近打包记录与构建历史一致，可跳转详情
 - [ ] 快速发起打包可直达对应项目的打包流程
