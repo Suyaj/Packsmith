@@ -70,17 +70,23 @@ export type DeploySummary = {
   targets: TargetOutcome[];
 };
 
-/** 发起部署：把选中构件以原文件名覆盖上传到各目标 → 停止 → 启动。 */
+/**
+ * 发起部署（ticket 17 一一对应上传）：每个目标上传自己选中的那一个构件
+ * （原文件名覆盖）→ 停止 → 启动；未被选中的构件绝不上传。
+ */
+export type TargetAssignment = {
+  targetId: number;
+  fileName: string;
+};
+
 export function startDeploy(
   historyId: number,
-  fileName: string,
-  targetIds: number[],
+  assignments: TargetAssignment[],
   onEvent: Channel<AutoDeployMessage>,
 ): Promise<DeploySummary> {
   return invoke("start_deploy", {
     historyId,
-    fileName,
-    targetIds,
+    assignments,
     onEvent,
   });
 }
