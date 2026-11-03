@@ -137,7 +137,9 @@
       "already_running": "该项目已有打包任务进行中",
       "spawn_failed": "构建进程启动失败：{{message}}",
       "log_not_found": "构建日志不存在：{{message}}",
-      "internal": "内部错误：{{message}}"
+      "internal": "内部错误：{{message}}",
+      "git_auth_failed": "Git 认证失败：请到 设置 → Git 账号 检查用户名与访问令牌（{{message}}）",
+      "ssh_not_supported": "暂不支持 SSH 协议仓库地址：v1.1 仅支持 HTTPS 认证，请改用 https:// 地址（或在 设置 → Git 账号 配置凭据）"
     }
   },
   "servers": {
@@ -259,6 +261,20 @@
       "minimizeHint": "窗口关闭后隐藏到系统托盘，应用继续运行（默认）",
       "quit": "退出应用",
       "quitHint": "关闭窗口时直接退出 Packsmith",
+      "saveError": "保存失败：{{error}}"
+    },
+    "gitAccount": {
+      "title": "Git 账号",
+      "description": "用于私有仓库的 clone 与分支拉取认证（v1.1 仅支持 HTTPS；凭据加密存储，不明文展示）",
+      "username": "用户名",
+      "token": "密码 / 访问令牌",
+      "tokenKeepHint": "留空保持不变",
+      "save": "保存",
+      "saved": "已保存",
+      "clear": "清除账号",
+      "set": "已设置",
+      "unset": "未设置",
+      "usernameRequired": "Git 用户名不能为空",
       "saveError": "保存失败：{{error}}"
     }
   },
