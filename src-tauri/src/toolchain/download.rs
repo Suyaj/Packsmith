@@ -1,10 +1,11 @@
 //! 流式下载：带进度回调，落盘到指定文件。
 //!
-//! 连接策略：默认客户端 + 15s 连接超时；连接失败时回退强制 IPv4。
-//! 背景：hyper 无 happy-eyeballs，部分网络环境下 github.com 的 IPv6
-//! 路由会长时间挂起（实测 IPv4 直连正常），回退可避免"永远转圈"。
+//! 连接策略：hyper 不做 happy-eyeballs——对解析出的多个地址只连第一个，
+//! 而本机网络会封锁 github.com 的部分地址（curl 能连上、reqwest 超时）。
+//! 因此自行解析地址并逐个回退；连接超时 8s/地址。传输中途断流则按
+//! HTTP Range 断点续传。
 
-use std::net::IpAddr;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::Path;
 use std::time::Duration;
 
@@ -13,37 +14,83 @@ use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
 use crate::toolchain::error::ToolchainError;
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
+const MAX_ADDRS: usize = 5;
 
-fn http_client(ipv4_only: bool) -> reqwest::Client {
-    let mut builder = reqwest::Client::builder().connect_timeout(CONNECT_TIMEOUT);
-    if ipv4_only {
-        builder = builder.local_address(IpAddr::from([0, 0, 0, 0]));
+/// 拆出 (host, port)。官方源一律 https；http 仅放行环回地址（测试用）。
+fn host_port(url: &str) -> Result<(String, u16), ToolchainError> {
+    let (scheme, rest) = url
+        .split_once("://")
+        .ok_or_else(|| ToolchainError::Http(format!("URL 缺少协议：{url}")))?;
+    let authority = rest.split('/').next().unwrap_or_default();
+    let host_no_port = authority
+        .rsplit_once(':')
+        .map(|(h, _)| h)
+        .unwrap_or(authority);
+    match (scheme, host_no_port) {
+        ("https", _) => {}
+        ("http", "localhost" | "127.0.0.1" | "::1") => {}
+        _ => return Err(ToolchainError::Http(format!("仅支持 https 下载：{url}"))),
     }
-    builder.build().expect("http client builds")
+    Ok(match authority.rsplit_once(':') {
+        Some((host, port)) => (
+            host.to_string(),
+            port.parse()
+                .map_err(|_| ToolchainError::Http(format!("端口非法：{url}")))?,
+        ),
+        None => (
+            authority.to_string(),
+            if scheme == "https" { 443 } else { 80 },
+        ),
+    })
 }
 
-async fn send_get(url: &str) -> Result<reqwest::Response, ToolchainError> {
-    // 尝试序列：默认（双栈）→ 强制 IPv4 → 稍候再强制 IPv4。
-    // 本机网络对 github 的 IPv6 路由会挂起、IPv4 也偶发抖动，重试可吸收。
+/// 解析域名全部地址（阻塞解析放 blocking 线程池）。
+async fn resolve_addrs(host: &str, port: u16) -> Result<Vec<SocketAddr>, ToolchainError> {
+    let host = host.to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok((host.as_str(), port).to_socket_addrs()?.collect::<Vec<_>>())
+    })
+    .await
+    .map_err(|e| ToolchainError::Http(format!("解析任务失败：{e}")))?
+    .map_err(|e: std::io::Error| ToolchainError::Http(format!("域名解析失败：{e}")))
+}
+
+/// 逐地址回退的 GET。连接级失败换下一个地址；HTTP 状态错误不重试
+///（交由调用方按业务处理）。`range_from` 为 Some 时带 Range 头。
+async fn send_get_inner(
+    url: &str,
+    range_from: Option<u64>,
+) -> Result<reqwest::Response, ToolchainError> {
+    let (host, port) = host_port(url)?;
+    let addrs = resolve_addrs(&host, port).await?;
+    if addrs.is_empty() {
+        return Err(ToolchainError::Http(format!("域名解析为空：{host}")));
+    }
     let mut last_err: Option<reqwest::Error> = None;
-    for (attempt, ipv4_only) in [false, true, true].into_iter().enumerate() {
-        if attempt > 1 {
-            tokio::time::sleep(Duration::from_secs(2)).await;
+    for addr in addrs.iter().take(MAX_ADDRS) {
+        let client = reqwest::Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .resolve_to_addrs(&host, std::slice::from_ref(addr))
+            .build()
+            .map_err(|e| ToolchainError::Http(format!("{e}")))?;
+        let mut request = client.get(url);
+        if let Some(offset) = range_from {
+            request = request.header(reqwest::header::RANGE, format!("bytes={offset}-"));
         }
-        match http_client(ipv4_only).get(url).send().await {
-            Ok(response) => {
-                return response
-                    .error_for_status()
-                    .map_err(|e| ToolchainError::Http(format!("{e}")));
-            }
+        match request.send().await {
+            Ok(response) => return Ok(response),
             Err(e) => last_err = Some(e),
         }
     }
     Err(ToolchainError::Http(format!(
         "{last_err}",
-        last_err = last_err.expect("at least one attempt")
+        last_err = last_err.expect("at least one address attempted")
     )))
+}
+
+async fn send_get(url: &str) -> Result<reqwest::Response, ToolchainError> {
+    send_get_inner(url, None).await
 }
 
 /// 下载 `url` 到 `dest`，每个数据块回调（已接收字节, 总字节）。
@@ -71,7 +118,7 @@ where
 
     let mut received: u64 = 0;
     let mut total: Option<u64> = None;
-    const MAX_ATTEMPTS: usize = 4;
+    const MAX_ATTEMPTS: usize = 8;
     for attempt in 0..MAX_ATTEMPTS {
         if attempt > 0 {
             tokio::time::sleep(Duration::from_secs(2)).await;
@@ -143,30 +190,8 @@ where
 }
 
 /// 带断点续传请求头的 GET（期望 206 Partial Content）。
-async fn send_get_range(
-    url: &str,
-    offset: u64,
-) -> Result<reqwest::Response, ToolchainError> {
-    let mut last_err: Option<reqwest::Error> = None;
-    for ipv4_only in [false, true] {
-        match http_client(ipv4_only)
-            .get(url)
-            .header(reqwest::header::RANGE, format!("bytes={offset}-"))
-            .send()
-            .await
-        {
-            Ok(response) => {
-                return response
-                    .error_for_status()
-                    .map_err(|e| ToolchainError::Http(format!("{e}")));
-            }
-            Err(e) => last_err = Some(e),
-        }
-    }
-    Err(ToolchainError::Http(format!(
-        "{last_err}",
-        last_err = last_err.expect("at least one attempt")
-    )))
+async fn send_get_range(url: &str, offset: u64) -> Result<reqwest::Response, ToolchainError> {
+    send_get_inner(url, Some(offset)).await
 }
 
 #[cfg(test)]

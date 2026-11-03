@@ -149,7 +149,10 @@ mod tests {
         ] {
             let src = source_for(ToolKind::Mvnd, os, arch).expect("mvnd source");
             assert_eq!(src.format, ArchiveFormat::Zip);
-            assert!(src.url.starts_with("https://github.com/apache/maven-mvnd/releases/"));
+            assert!(
+                src.url
+                    .starts_with("https://github.com/apache/maven-mvnd/releases/")
+            );
             assert!(src.url.ends_with(".zip"));
         }
     }
@@ -167,7 +170,12 @@ mod tests {
             ("windows", "x86_64") => "windows-amd64",
             other => panic!("未覆盖的平台 {other:?}"),
         };
-        assert!(src.url.contains(expected_tag), "{} 应含 {}", src.url, expected_tag);
+        assert!(
+            src.url.contains(expected_tag),
+            "{} 应含 {}",
+            src.url,
+            expected_tag
+        );
     }
 
     #[test]

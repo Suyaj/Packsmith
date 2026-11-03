@@ -29,7 +29,10 @@ pub fn extract_archive(
 
 /// 防穿越：路径必须是相对的、不含 ".." 的普通组件序列。
 fn safe_rel(rel: &Path) -> bool {
-    if matches!(rel.components().next(), Some(Component::RootDir | Component::Prefix(_))) {
+    if matches!(
+        rel.components().next(),
+        Some(Component::RootDir | Component::Prefix(_))
+    ) {
         return false;
     }
     rel.components()
@@ -42,7 +45,11 @@ fn escape_err(entry: &str) -> io::Error {
 
 /// 计算条目在 dest 内的目标路径。strip_top=true 时要求条目位于顶层目录
 /// 之下并剥离它；非法条目返回 Err。
-fn dest_path_for(entry_name: &str, dest_root: &Path, strip_top: bool) -> io::Result<Option<PathBuf>> {
+fn dest_path_for(
+    entry_name: &str,
+    dest_root: &Path,
+    strip_top: bool,
+) -> io::Result<Option<PathBuf>> {
     // 目录条目（以 / 结尾）与文件条目同样处理；空 rest 表示顶层目录本身。
     let (rest, is_top_marker) = if strip_top {
         match entry_name.split_once('/') {
@@ -161,8 +168,14 @@ mod tests {
         let dest = dir.join("tools/mvnd");
         extract_archive(&archive, &dest, ArchiveFormat::Zip, true).unwrap();
 
-        assert_eq!(std::fs::read_to_string(dest.join("bin/mvnd")).unwrap(), "#!/bin/sh");
-        assert_eq!(std::fs::read_to_string(dest.join("README.adoc")).unwrap(), "hello");
+        assert_eq!(
+            std::fs::read_to_string(dest.join("bin/mvnd")).unwrap(),
+            "#!/bin/sh"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dest.join("README.adoc")).unwrap(),
+            "hello"
+        );
         assert!(!dest.join("maven-mvnd-1.0.6-darwin-aarch64").exists());
     }
 
@@ -178,8 +191,14 @@ mod tests {
         let dest = dir.join("tools/git");
         extract_archive(&archive, &dest, ArchiveFormat::Zip, false).unwrap();
 
-        assert_eq!(std::fs::read_to_string(dest.join("cmd/git.exe")).unwrap(), "MZ");
-        assert_eq!(std::fs::read_to_string(dest.join("etc/gitconfig")).unwrap(), "[core]");
+        assert_eq!(
+            std::fs::read_to_string(dest.join("cmd/git.exe")).unwrap(),
+            "MZ"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dest.join("etc/gitconfig")).unwrap(),
+            "[core]"
+        );
     }
 
     #[test]
@@ -228,7 +247,11 @@ mod tests {
             header.set_mode(0o755);
             header.set_cksum();
             builder
-                .append_data(&mut header, "jdk8u504-b01/Contents/Home/bin/java", &data[..])
+                .append_data(
+                    &mut header,
+                    "jdk8u504-b01/Contents/Home/bin/java",
+                    &data[..],
+                )
                 .unwrap();
             builder.into_inner().unwrap().finish().unwrap();
         }

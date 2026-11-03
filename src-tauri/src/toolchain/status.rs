@@ -13,9 +13,14 @@ use crate::toolchain::state::{ManagedEntry, ManagedState};
 #[serde(tag = "state", rename_all = "lowercase")]
 pub enum ToolState {
     /// 已托管：本应用数据目录内有登记且可执行文件存在。
-    Managed { version: String, path: String },
+    Managed {
+        version: String,
+        path: String,
+    },
     /// 已检测：系统 PATH 上存在，仅展示（ADR-0001）。
-    Detected { path: String },
+    Detected {
+        path: String,
+    },
     Missing,
 }
 

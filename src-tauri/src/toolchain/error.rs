@@ -1,14 +1,18 @@
 //! 工具链模块错误类型。经 Tauri IPC 序列化为字符串。
 
-use serde::ser::Serializer;
 use serde::Serialize;
+use serde::ser::Serializer;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ToolchainError {
     #[error("网络下载失败：{0}")]
     Http(String),
     #[error("当前平台（{os}/{arch}）暂无 {tool} 的官方安装包")]
-    NoSourceForPlatform { tool: String, os: String, arch: String },
+    NoSourceForPlatform {
+        tool: String,
+        os: String,
+        arch: String,
+    },
     #[error("解压安装包失败：{0}")]
     Archive(String),
     #[error("本地文件操作失败：{0}")]

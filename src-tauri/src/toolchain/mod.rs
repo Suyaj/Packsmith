@@ -43,11 +43,7 @@ fn guard_slot_acquire(app: &AppHandle, kind: ToolKind) -> Result<(), ToolchainEr
 
 fn guard_slot_release(app: &AppHandle, kind: ToolKind) {
     let guard = app.state::<DownloadGuard>();
-    guard
-        .0
-        .lock()
-        .expect("download guard lock")
-        .remove(&kind);
+    guard.0.lock().expect("download guard lock").remove(&kind);
 }
 
 /// `<appdata>/tools/`：托管工具安装根目录。
@@ -126,22 +122,26 @@ mod tests {
             assert!(status_view(ToolKind::Mvnd, ToolState::Missing).can_download);
             assert!(status_view(ToolKind::Jdk, ToolState::Missing).can_download);
             // 已检测（PATH）也可一键托管（票 03 决策）
-            assert!(status_view(
-                ToolKind::Mvnd,
-                ToolState::Detected {
-                    path: "/opt/homebrew/bin/mvnd".into()
-                }
-            )
-            .can_download);
+            assert!(
+                status_view(
+                    ToolKind::Mvnd,
+                    ToolState::Detected {
+                        path: "/opt/homebrew/bin/mvnd".into()
+                    }
+                )
+                .can_download
+            );
             // 已托管不再提供下载
-            assert!(!status_view(
-                ToolKind::Mvnd,
-                ToolState::Managed {
-                    version: "1.0.6".into(),
-                    path: "mvnd/bin/mvnd".into()
-                }
-            )
-            .can_download);
+            assert!(
+                !status_view(
+                    ToolKind::Mvnd,
+                    ToolState::Managed {
+                        version: "1.0.6".into(),
+                        path: "mvnd/bin/mvnd".into()
+                    }
+                )
+                .can_download
+            );
         }
     }
 

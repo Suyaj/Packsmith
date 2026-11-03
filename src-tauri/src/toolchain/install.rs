@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use crate::toolchain::archive::extract_archive;
-use crate::toolchain::catalog::{current_source, ArchiveFormat, ToolKind};
+use crate::toolchain::catalog::{ArchiveFormat, ToolKind, ToolSource, current_source};
 use crate::toolchain::download::download_to;
 use crate::toolchain::error::ToolchainError;
 use crate::toolchain::status::{find_executable_in, register_managed};
@@ -35,14 +35,23 @@ pub enum Phase {
 pub async fn install_tool(
     kind: ToolKind,
     tools_root: &Path,
-    mut on_progress: impl FnMut(ProgressEvent) + Send,
+    on_progress: impl FnMut(ProgressEvent) + Send,
 ) -> Result<String, ToolchainError> {
     let source = current_source(kind).ok_or_else(|| ToolchainError::NoSourceForPlatform {
         tool: kind.dir_name().to_string(),
         os: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(),
     })?;
+    install_from(kind, tools_root, &source, on_progress).await
+}
 
+/// 按给定安装包来源安装（测试可指向本地服务，覆盖 catalog 查表）。
+pub async fn install_from(
+    kind: ToolKind,
+    tools_root: &Path,
+    source: &ToolSource,
+    mut on_progress: impl FnMut(ProgressEvent) + Send,
+) -> Result<String, ToolchainError> {
     cleanup_stale(tools_root, kind)?;
 
     let file_name = source
@@ -64,15 +73,22 @@ pub async fn install_tool(
     })
     .await?;
 
-    let extracted_to =
-        extract_step(kind, tools_root, archive_path, source.format, source.strip_top, &mut on_progress)
-            .await?;
+    let extracted_to = extract_step(
+        kind,
+        tools_root,
+        archive_path,
+        source.format,
+        source.strip_top,
+        &mut on_progress,
+    )
+    .await?;
 
-    let exec =
-        find_executable_in(kind, &extracted_to).ok_or_else(|| {
-            ToolchainError::Archive("解压后未找到工具可执行文件".to_string())
-        })?;
-    let exec_rel = exec.strip_prefix(&extracted_to).unwrap_or(&exec).to_path_buf();
+    let exec = find_executable_in(kind, &extracted_to)
+        .ok_or_else(|| ToolchainError::Archive("解压后未找到工具可执行文件".to_string()))?;
+    let exec_rel = exec
+        .strip_prefix(&extracted_to)
+        .unwrap_or(&exec)
+        .to_path_buf();
 
     on_progress(ProgressEvent {
         tool: kind,
@@ -150,8 +166,8 @@ fn cleanup_stale(tools_root: &Path, kind: ToolKind) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::toolchain::status::compute_status;
     use crate::toolchain::status::ToolState;
+    use crate::toolchain::status::compute_status;
 
     fn temp_root(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -179,6 +195,80 @@ mod tests {
         ));
         assert!(!tools_root.join("git").exists());
         let _ = std::fs::remove_dir_all(&tools_root);
+    }
+
+    /// 全链路 smoke（确定性）：起本地 HTTP 服务提供与官方包完全相同
+    /// 布局（顶层目录 + bin/mvnd）的安装包，走 download_to（真实 socket、
+    /// 真实 HTTP）→ 解压 → 登记 → 三态判定。远程下载部分由两个
+    /// 真实网络 smoke 分别覆盖。
+    #[tokio::test]
+    async fn 全链路_本地服务安装mvnd并登记为已托管() {
+        use std::io::{Read as _, Write as _};
+
+        // 组装官方布局的安装包字节
+        let dir = temp_root("local-srv");
+        std::fs::create_dir_all(&dir).unwrap();
+        let zip_path = dir.join("mvnd.zip");
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            zip.start_file(
+                "maven-mvnd-1.0.6-darwin-aarch64/bin/mvnd",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+            std::io::Write::write_all(&mut zip, b"#!/bin/sh\necho mvnd").unwrap();
+            zip.finish().unwrap();
+        }
+        let body = std::fs::read(&zip_path).unwrap();
+
+        // 单连接 HTTP 服务
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server_body = body.clone();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    server_body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.write_all(&server_body);
+            }
+        });
+
+        let tools_root = temp_root("local-install");
+        std::fs::create_dir_all(&tools_root).unwrap();
+        let source = ToolSource {
+            url: format!("http://127.0.0.1:{port}/maven-mvnd-1.0.6-darwin-aarch64.zip"),
+            format: ArchiveFormat::Zip,
+            version: "1.0.6",
+            strip_top: true,
+        };
+
+        let mut events = Vec::new();
+        let version = install_from(ToolKind::Mvnd, &tools_root, &source, |e| events.push(e))
+            .await
+            .expect("本地全链路安装");
+
+        assert_eq!(version, "1.0.6");
+        assert_eq!(
+            std::fs::read_to_string(tools_root.join("mvnd/bin/mvnd")).unwrap(),
+            "#!/bin/sh\necho mvnd"
+        );
+        assert!(events.iter().any(|e| e.phase == Phase::Downloading));
+        assert!(events.iter().any(|e| e.phase == Phase::Extracting));
+        assert!(matches!(
+            compute_status(ToolKind::Mvnd, &tools_root),
+            ToolState::Managed { .. }
+        ));
+        // 状态文件已登记
+        let state = crate::toolchain::state::ManagedState::load(&tools_root);
+        assert_eq!(state.tools.get("mvnd").unwrap().version, "1.0.6");
+        let _ = std::fs::remove_dir_all(&tools_root);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 真实网络 smoke：下载 mvnd 官方包（约 23MB）装进临时目录，
