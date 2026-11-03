@@ -54,6 +54,20 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
         );",
     },
+    Migration {
+        version: 4,
+        name: "ticket 09: deployment_targets (项目 × 服务器 bindings)",
+        sql: "CREATE TABLE deployment_targets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+            upload_dir TEXT NOT NULL,
+            start_commands TEXT NOT NULL DEFAULT '',
+            stop_commands TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            UNIQUE (project_id, server_id)
+        );",
+    },
 ];
 
 pub(crate) const LATEST_SCHEMA_VERSION: i32 = MIGRATIONS[MIGRATIONS.len() - 1].version;

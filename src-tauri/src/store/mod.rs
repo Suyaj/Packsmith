@@ -120,6 +120,11 @@ impl Store {
         // is not accepted by SQLite's PRAGMA-value grammar.)
         conn.execute_batch(&format!("PRAGMA key = 'x''{key_hex}''';"))?;
 
+        // SQLite defaults to *off*; every cross-table integrity promise in the
+        // schema (e.g. deployment targets cascading when their project or
+        // server is deleted — ticket 09) relies on enforcement being on.
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+
         // Fail fast with a clear error if this build linked plain SQLite
         // (e.g. via feature unification) instead of SQLCipher.
         let cipher: Option<String> = match conn.query_row("PRAGMA cipher_version", [], |r| r.get(0))

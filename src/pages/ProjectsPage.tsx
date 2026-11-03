@@ -4,6 +4,7 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import DeploymentTargetsPanel from "@/components/DeploymentTargetsPanel";
 
 type ProjectType = "maven" | "gradle";
 type ProjectSource = "git" | "local";
@@ -217,6 +218,8 @@ function ProjectsPage() {
   const { t } = useTranslation();
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [creating, setCreating] = useState(false);
+  /** 当前展开“部署目标”面板的项目（同时最多展开一个）。 */
+  const [targetsFor, setTargetsFor] = useState<Project | null>(null);
 
   const refresh = useCallback(async () => {
     setProjects(await invoke<Project[]>("list_projects"));
@@ -257,6 +260,15 @@ function ProjectsPage() {
         />
       )}
 
+      {targetsFor && (
+        <div className="mt-4">
+          <DeploymentTargetsPanel
+            projectId={targetsFor.id}
+            projectName={targetsFor.name}
+          />
+        </div>
+      )}
+
       <Card className="mt-4">
         <CardHeader>
           <CardTitle>{t("projects.listTitle")}</CardTitle>
@@ -284,6 +296,17 @@ function ProjectsPage() {
                     </td>
                     <td className="py-1.5 pr-4">
                       {t(`projects.type.${p.project_type}`)}
+                    </td>
+                    <td className="py-1.5 pr-4">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          setTargetsFor((cur) => (cur?.id === p.id ? null : p))
+                        }
+                      >
+                        {t("projects.targetsButton")}
+                      </Button>
                     </td>
                   </tr>
                 ))}
