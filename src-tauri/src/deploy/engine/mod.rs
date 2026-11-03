@@ -22,7 +22,7 @@ use async_trait::async_trait;
 use serde::Serialize;
 
 use crate::store::projects::CancelFlag;
-use crate::targets::repo::split_commands as split_commands_stored;
+use crate::targets::repo::split_command_group as split_command_group_stored;
 
 /// One phase's output snapshot (upload/stop/start). `combined` is the
 /// command's stdout + stderr (or an engine-written line for the upload).
@@ -240,9 +240,9 @@ pub trait DeployTransport: Send {
 }
 
 /// Splits a 命令组 into its commands (same normalization as storage,
-/// `targets::repo::split_commands`).
-pub fn split_commands(text: &str) -> Vec<String> {
-    split_commands_stored(text)
+/// `targets::repo::split_command_group`).
+pub fn split_command_group(text: &str) -> Vec<String> {
+    split_command_group_stored(text)
 }
 
 /// Joins a command group into one serial shell script: commands run in order

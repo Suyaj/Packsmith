@@ -3,7 +3,7 @@
 //! Seams under test:
 //! - `targets::repo::{list_for_project, create, update, delete}` — persistence
 //!   over `&Store` (same seam shape as `server::repo`)
-//! - `targets::repo::split_commands` — 命令组 line handling (trim, blank-line
+//! - `targets::repo::split_command_group` — 命令组 line handling (trim, blank-line
 //!   removal, order preservation)
 //! - the schema created by migration v4 (`deployment_targets` table) and its
 //!   foreign keys (project × server integrity)
@@ -137,15 +137,15 @@ fn command_groups_are_normalized_but_order_preserved() {
 #[test]
 fn split_commands_splits_trims_and_drops_blank_lines_in_order() {
     assert_eq!(
-        repo::split_commands("cd /home/app\nsh start.sh start"),
+        repo::split_command_group("cd /home/app\nsh start.sh start"),
         vec!["cd /home/app".to_string(), "sh start.sh start".to_string()]
     );
     assert_eq!(
-        repo::split_commands("  a \n\n  b  \n\t\nc"),
+        repo::split_command_group("  a \n\n  b  \n\t\nc"),
         vec!["a".to_string(), "b".to_string(), "c".to_string()]
     );
-    assert_eq!(repo::split_commands("   \n\t "), Vec::<String>::new());
-    assert_eq!(repo::split_commands(""), Vec::<String>::new());
+    assert_eq!(repo::split_command_group("   \n\t "), Vec::<String>::new());
+    assert_eq!(repo::split_command_group(""), Vec::<String>::new());
 }
 
 #[test]

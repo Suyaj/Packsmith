@@ -110,8 +110,8 @@ fn resolve_jobs(
             Ok(TargetJob {
                 target_id: target.id,
                 upload_dir: target.upload_dir,
-                stop_commands: engine::split_commands(&target.stop_commands),
-                start_commands: engine::split_commands(&target.start_commands),
+                stop_commands: engine::split_command_group(&target.stop_commands),
+                start_commands: engine::split_command_group(&target.start_commands),
                 conn: ConnInfo {
                     server_id: server.id,
                     host: server.host.clone(),
