@@ -22,6 +22,26 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     },
     Migration {
         version: 2,
+        name: "ticket 04: servers + known_hosts (accepted fingerprints)",
+        sql: "CREATE TABLE servers (
+            id INTEGER PRIMARY KEY,
+            host TEXT NOT NULL,
+            port INTEGER NOT NULL DEFAULT 22,
+            username TEXT NOT NULL,
+            auth_method TEXT NOT NULL CHECK (auth_method IN ('private_key', 'password')),
+            password TEXT,
+            private_key_path TEXT,
+            private_key_passphrase TEXT
+        );
+        CREATE TABLE known_hosts (
+            host TEXT NOT NULL,
+            port INTEGER NOT NULL,
+            fingerprint TEXT NOT NULL,
+            PRIMARY KEY (host, port)
+        );",
+    },
+    Migration {
+        version: 3,
         name: "项目: projects table",
         sql: "CREATE TABLE projects (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

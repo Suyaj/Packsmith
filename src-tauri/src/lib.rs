@@ -1,6 +1,7 @@
 use tauri::Manager;
 
 pub mod commands;
+pub mod server;
 pub mod store;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -13,6 +14,12 @@ pub fn run() {
             commands::clone_project,
             commands::import_project,
             commands::cancel_clone,
+            server::commands::list_servers,
+            server::commands::create_server,
+            server::commands::update_server,
+            server::commands::delete_server,
+            server::commands::test_server_connection,
+            server::commands::accept_host_key,
         ])
         .setup(|app| {
             // Auto-initialize the encrypted store on every startup: the key
