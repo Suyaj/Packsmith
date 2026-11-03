@@ -12,6 +12,11 @@ vi.mock("@tauri-apps/api/core", () => {
   };
 });
 
+const getVersionMock = vi.fn(async () => "1.2.3");
+vi.mock("@tauri-apps/api/app", () => ({
+  getVersion: () => getVersionMock(),
+}));
+
 import { invoke } from "@tauri-apps/api/core";
 import "@/i18n";
 
@@ -40,6 +45,29 @@ function rowOf(toolText: string | RegExp): HTMLElement {
 
 beforeEach(() => {
   mockInvoke.mockReset();
+  getVersionMock.mockClear();
+});
+
+describe("设置页：应用信息", () => {
+  it("展示应用版本信息（tauri getVersion）", async () => {
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "toolchain_status") return fixtureStatuses;
+      throw new Error(`unexpected command ${cmd}`);
+    });
+    render(<SettingsPage />);
+
+    expect(await screen.findByText("应用版本：1.2.3")).toBeInTheDocument();
+  });
+
+  it("展示依赖仓库位置（<appdata>/m2-repo，持久保留）", async () => {
+    mockInvoke.mockResolvedValue(fixtureStatuses);
+    render(<SettingsPage />);
+
+    expect(
+      await screen.findByText(/依赖仓库：<appdata>\/m2-repo/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/持久保留/)).toBeInTheDocument();
+  });
 });
 
 describe("设置页：托管工具链", () => {

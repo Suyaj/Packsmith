@@ -214,6 +214,7 @@
   "settings": {
     "title": "设置",
     "empty": "设置项即将可用",
+    "appVersion": "应用版本：{{version}}",
     "retention": {
       "title": "构件库保留策略",
       "description": "每个项目在产物库中保留最近 N 次构建的构件与日志，超出自动清理。",
@@ -229,6 +230,7 @@
       "loadError": "检测失败：{{error}}",
       "notOnPath": "未在本机检测到",
       "managedVersion": "托管版本 {{version}}",
+      "dependencyRepo": "依赖仓库：<appdata>/m2-repo（持久保留、从不删除，构建间复用依赖缓存）",
       "download": "下载托管",
       "retry": "重试",
       "state": {
