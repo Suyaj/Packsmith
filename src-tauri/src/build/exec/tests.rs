@@ -115,6 +115,7 @@ fn 用户命令已含maven_repo_local时不重复追加() {
 }
 
 #[test]
+#[allow(non_snake_case)]
 fn 启动规格注入JAVA_HOME并把托管bin前置到PATH() {
     let (_dir, tc) = fake_toolchain("spec-env");
     let repo = PathBuf::from("/appdata/m2-repo");
