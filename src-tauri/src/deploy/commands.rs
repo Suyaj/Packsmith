@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicI64, Ordering};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::commands::ApiError;
@@ -120,31 +120,54 @@ fn resolve_jobs(
                     credential: server.credential.clone(),
                     fingerprint,
                 },
+                artifact: None,
             })
         })
         .collect()
 }
 
 fn artifact_path(artifacts_dir: &str, file_name: &str) -> Result<std::path::PathBuf, ApiError> {
-    let local_path = std::path::Path::new(artifacts_dir).join(file_name);
-    if !local_path.is_file() {
+    // The assignment must name a file from this build's artifact listing
+    // (ticket 17 校验): no path separators / traversal — anything else is
+    // rejected up front with the i18n-able `artifact_not_found` code.
+    if file_name.is_empty()
+        || file_name.contains('/')
+        || file_name.contains('\\')
+        || file_name.contains("..")
+    {
         return Err(ApiError::raw(
             "artifact_not_found",
-            format!("{file_name} not found in the artifact library"),
+            format!("artifact {file_name:?} is not in this build's artifact listing"),
+        ));
+    }
+    let local_path = std::path::Path::new(artifacts_dir).join(file_name);
+    if !local_path.is_file() {
+        // 前端按 code 选中文案（deploy.errors.artifact_not_found）。
+        return Err(ApiError::raw(
+            "artifact_not_found",
+            format!("artifact {file_name:?} is not in this build's artifact listing"),
         ));
     }
     Ok(local_path)
+}
+
+/// One target's file choice (ticket 17 一一对应上传): deploy uploads
+/// `file_name` to `target_id`'s upload dir — each target gets its own file.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetAssignment {
+    pub target_id: i64,
+    pub file_name: String,
 }
 
 #[tauri::command]
 pub async fn start_deploy(
     app: AppHandle,
     history_id: i64,
-    file_name: String,
-    target_ids: Vec<i64>,
+    assignments: Vec<TargetAssignment>,
     on_event: tauri::ipc::Channel<DeployEvent>,
 ) -> Result<engine::DeploySummary, ApiError> {
-    if target_ids.is_empty() {
+    if assignments.is_empty() {
         return Err(ApiError::raw(
             "no_targets_selected",
             "no deployment targets selected",
@@ -152,7 +175,7 @@ pub async fn start_deploy(
     }
     let store = (*app.state::<Store>()).clone();
 
-    let (artifact, _project_id, jobs) = {
+    let jobs = {
         let entry = history::list(&store, None)?
             .into_iter()
             .find(|e| e.id == history_id)
@@ -167,15 +190,30 @@ pub async fn start_deploy(
             .artifacts_dir
             .clone()
             .ok_or_else(|| ApiError::raw("artifacts_dir_missing", entry.build_id.clone()))?;
-        let artifact = engine::ArtifactRef {
-            local_path: artifact_path(&artifacts_dir, &file_name)?,
-            file_name,
-        };
-        (
-            Some(artifact),
-            entry.project_id,
-            resolve_jobs(&store, entry.project_id, &target_ids)?,
-        )
+        let target_ids: Vec<i64> = assignments.iter().map(|a| a.target_id).collect();
+        let mut seen = std::collections::HashSet::new();
+        if !target_ids.iter().all(|id| seen.insert(*id)) {
+            return Err(ApiError::raw(
+                "duplicate_target",
+                "each deployment target may appear only once in the assignments",
+            ));
+        }
+        let mut jobs = resolve_jobs(&store, entry.project_id, &target_ids)?;
+        // Per-target artifact: every assigned file must exist in this build's
+        // artifact listing, otherwise the whole deploy is rejected up front.
+        for assignment in &assignments {
+            let job = jobs
+                .iter_mut()
+                .find(|j| j.target_id == assignment.target_id)
+                .expect("resolve_jobs preserves target order");
+            let file_name = assignment.file_name.trim().to_string();
+            let local_path = artifact_path(&artifacts_dir, &file_name)?;
+            job.artifact = Some(engine::ArtifactRef {
+                local_path,
+                file_name,
+            });
+        }
+        jobs
     };
 
     let registry = app.state::<DeployRegistry>();
@@ -189,7 +227,6 @@ pub async fn start_deploy(
     };
     let summary = engine::run_deploy(
         DeployPlan {
-            artifact,
             run_stop: true,
             targets: jobs,
         },
@@ -235,7 +272,6 @@ pub async fn run_start_group(
     };
     let summary = engine::run_deploy(
         DeployPlan {
-            artifact: None,
             run_stop: false,
             targets: jobs,
         },
@@ -290,8 +326,17 @@ pub fn auto_chain_after_build(
     };
 
     let jobs = resolve_jobs(&store, project_id, &enabled)?;
+    // 自动连锁 keeps its one-artifact-to-every-target shape: the same chosen
+    // artifact is attached to each target job (per-target assignment only
+    // applies to the manual deploy dialog).
+    let jobs = jobs
+        .into_iter()
+        .map(|mut job| {
+            job.artifact = Some(artifact.clone());
+            job
+        })
+        .collect();
     let plan = DeployPlan {
-        artifact: Some(artifact),
         run_stop: true,
         targets: jobs,
     };
@@ -314,4 +359,27 @@ pub fn auto_chain_after_build(
         }
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ticket 17 校验: only files actually in this build's artifact listing
+    /// resolve; anything else (missing file, path traversal) is rejected with
+    /// the stable `artifact_not_found` code the frontend keys Chinese i18n on.
+    #[test]
+    fn artifact_path_rejects_files_outside_the_builds_artifact_listing() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.jar"), b"x").unwrap();
+
+        // A file in the listing resolves to its path in the 产物库.
+        let ok = artifact_path(dir.path().to_str().unwrap(), "a.jar").unwrap();
+        assert_eq!(ok, dir.path().join("a.jar"));
+
+        for bad in ["missing.jar", "", "../evil.jar", "sub/dir.jar", "..\\evil.jar"] {
+            let err = artifact_path(dir.path().to_str().unwrap(), bad).unwrap_err();
+            assert_eq!(err.code(), "artifact_not_found", "case {bad:?}");
+        }
+    }
 }

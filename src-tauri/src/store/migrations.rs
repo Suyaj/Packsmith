@@ -115,6 +115,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         );
         CREATE INDEX idx_deploy_records_target ON deploy_records(target_id);",
     },
+    Migration {
+        version: 11,
+        name: "ticket 17: deployment_targets.last_artifact (记住该目标上次部署选择的构件)",
+        sql: "ALTER TABLE deployment_targets ADD COLUMN last_artifact TEXT;",
+    },
 ];
 
 pub(crate) const LATEST_SCHEMA_VERSION: i32 = MIGRATIONS[MIGRATIONS.len() - 1].version;
