@@ -79,11 +79,14 @@ fn home_dir() -> Option<PathBuf> {
 // Clone
 // ---------------------------------------------------------------------------
 
-/// 把 `url` 克隆到 `dest`。取消标志在传输回调中轮询，置位后中止并返回
-/// [`ProjectError::Cancelled`]（调用方负责清理半成品目录）。
+/// 把 `url` 克隆到 `dest`。`branch` 指定要检出的分支（打包流程按所选分支
+/// clone，ticket 06）；`None` 用远端默认分支。取消标志在传输回调中轮询，
+/// 置位后中止并返回 [`ProjectError::Cancelled`]（调用方负责清理半成品目录）。
+/// 不存在的分支名会返回 [`ProjectError::Clone`]（libgit2 报 reference not found）。
 pub fn clone_repo(
     url: &str,
     dest: &Path,
+    branch: Option<&str>,
     on_progress: &mut dyn FnMut(CloneProgress),
     cancel: &CancelFlag,
 ) -> Result<(), ProjectError> {
@@ -129,6 +132,9 @@ pub fn clone_repo(
     fetch_options.remote_callbacks(remote_callbacks);
 
     let mut builder = RepoBuilder::new();
+    if let Some(branch) = branch {
+        builder.branch(branch);
+    }
     builder.fetch_options(fetch_options);
 
     on_progress_in(&reporter, CloneProgress::stage(CloneStage::Preparing));
@@ -176,7 +182,7 @@ pub fn clone_and_register(
         std::fs::create_dir_all(parent)?;
     }
 
-    if let Err(e) = clone_repo(url, &dest, on_progress, cancel) {
+    if let Err(e) = clone_repo(url, &dest, None, on_progress, cancel) {
         // 半成品目录不残留（验收：clone 失败无残留）。
         let _ = std::fs::remove_dir_all(&dest);
         return Err(e);

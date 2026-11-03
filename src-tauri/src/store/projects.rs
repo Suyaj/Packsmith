@@ -117,6 +117,12 @@ pub enum ProjectError {
     /// 克隆失败（git2 / URL 无效等）。
     #[error("clone failed: {0}")]
     Clone(String),
+    /// 实时拉取分支列表失败（`git ls-remote` 等价操作；URL 不可达 / 不是 git 仓库等）。
+    #[error("failed to list remote branches: {0}")]
+    BranchListing(String),
+    /// 指定 id 的项目不存在。
+    #[error("project {0} not found")]
+    ProjectNotFound(i64),
     #[error("store error: {0}")]
     Store(#[from] StoreError),
     #[error("io error: {0}")]
@@ -136,6 +142,8 @@ impl ProjectError {
             ProjectError::InvalidType(_) => "invalid_type",
             ProjectError::Cancelled => "cancelled",
             ProjectError::Clone(_) => "clone_failed",
+            ProjectError::BranchListing(_) => "branch_listing_failed",
+            ProjectError::ProjectNotFound(_) => "project_not_found",
             ProjectError::Store(_) => "store",
             ProjectError::Io(_) => "io",
         }
