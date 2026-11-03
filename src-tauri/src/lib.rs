@@ -82,8 +82,9 @@ pub fn run() {
         })
         .setup(|app| {
             // Auto-initialize the encrypted store on every startup: the key
-            // is generated on first run and kept in the OS keychain, so the
-            // user is never prompted for input.
+            // lives in <appdata>/db.key (0600), generated on first run; the
+            // keychain is only touched once to migrate pre-ticket-16 keys —
+            // the user is never prompted for input.
             let db_path = app.path().app_data_dir()?.join("packsmith.db");
             let store = store::Store::open_default(&db_path)?;
             app.manage(store);
