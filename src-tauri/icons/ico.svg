@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+    <defs>
+        <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#0f172a"/>
+            <stop offset="100%" stop-color="#1e3a5f"/>
+        </linearGradient>
+        <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#38bdf8"/>
+            <stop offset="100%" stop-color="#22c55e"/>
+        </linearGradient>
+    </defs>
+
+    <!-- 圆角方形背景 -->
+    <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+
+    <!-- 外圈细线，增加科技感 -->
+    <rect x="40" y="40" width="432" height="432" rx="88"
+          fill="none" stroke="#ffffff" stroke-opacity="0.10" stroke-width="4"/>
+
+    <!-- 主体字母 P + 锤子/打包几何 -->
+    <g>
+        <!-- P 的竖笔 -->
+        <rect x="196" y="128" width="44" height="256" rx="22" fill="url(#accent)"/>
+        <!-- P 的圆弧部分 -->
+        <path d="M240 128
+             H300
+             C352 128 384 160 384 204
+             C384 248 352 280 300 280
+             H240
+             V236
+             H296
+             C320 236 336 224 336 204
+             C336 184 320 172 296 172
+             H240
+             Z"
+              fill="#ffffff"/>
+        <!-- 底部“打包/锻造”短线装饰 -->
+        <rect x="196" y="344" width="120" height="24" rx="12" fill="#ffffff" fill-opacity="0.85"/>
+        <rect x="196" y="384" width="72" height="16" rx="8" fill="#38bdf8" fill-opacity="0.9"/>
+        <!-- 右上角小方块，暗示“打包/模块” -->
+        <rect x="344" y="88" width="56" height="56" rx="14" fill="#22c55e" fill-opacity="0.95"/>
+        <rect x="360" y="104" width="24" height="24" rx="6" fill="#0f172a" fill-opacity="0.85"/>
+    </g>
+</svg>
