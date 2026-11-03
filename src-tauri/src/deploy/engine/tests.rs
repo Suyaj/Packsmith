@@ -418,7 +418,7 @@ async fn connection_failure_fails_only_that_target() {
 #[tokio::test]
 async fn upload_failure_fails_target_before_any_command_group() {
     let (_dir, path) = tmp_artifact("a.jar", b"x");
-    let mocks: Arc<Mutex<HashMap<i64, MockTransport>>> = Arc::new(Mutex::new(HashMap::new()));
+    let _mocks: Arc<Mutex<HashMap<i64, MockTransport>>> = Arc::new(Mutex::new(HashMap::new()));
     let summary = {
         let factory = move |conn: ConnInfo| {
             let _ = conn;

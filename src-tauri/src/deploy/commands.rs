@@ -151,7 +151,7 @@ pub async fn start_deploy(
     }
     let store = (*app.state::<Store>()).clone();
 
-    let (artifact, project_id, jobs) = {
+    let (artifact, _project_id, jobs) = {
         let entry = history::list(&store, None)?
             .into_iter()
             .find(|e| e.id == history_id)
