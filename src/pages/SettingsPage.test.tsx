@@ -155,6 +155,66 @@ describe("设置页：托管工具链", () => {
   });
 });
 
+describe("设置页：构件库保留策略", () => {
+  function mockBackend(map: Record<string, (args: unknown) => unknown>) {
+    mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
+      const handler = map[cmd];
+      if (!handler) throw new Error(`unexpected command: ${cmd}`);
+      return handler(args);
+    });
+  }
+
+  it("进入设置页读取当前保留次数", async () => {
+    mockBackend({
+      toolchain_status: () => fixtureStatuses,
+      get_build_retention: () => 10,
+    });
+    render(<SettingsPage />);
+
+    const input = (await screen.findByLabelText("保留次数")) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe("10"));
+  });
+
+  it("修改保留次数并保存到后端", async () => {
+    mockBackend({
+      toolchain_status: () => fixtureStatuses,
+      get_build_retention: () => 10,
+      set_build_retention: (args) => {
+        expect(args).toMatchObject({ retention: 3 });
+        return null;
+      },
+    });
+    render(<SettingsPage />);
+
+    const input = await screen.findByLabelText("保留次数");
+    await userEvent.clear(input);
+    await userEvent.type(input, "3");
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    expect(await screen.findByText("已保存")).toBeInTheDocument();
+    expect(mockInvoke).toHaveBeenCalledWith("set_build_retention", { retention: 3 });
+  });
+
+  it("非法保留次数被拒绝且不调用后端", async () => {
+    mockBackend({
+      toolchain_status: () => fixtureStatuses,
+      get_build_retention: () => 10,
+    });
+    render(<SettingsPage />);
+
+    const input = await screen.findByLabelText("保留次数");
+    await userEvent.clear(input);
+    await userEvent.type(input, "0");
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    expect(await screen.findByText(/不小于 1/)).toBeInTheDocument();
+    expect(mockInvoke).not.toHaveBeenCalledWith(
+      "set_build_retention",
+      expect.anything(),
+    );
+  });
+});
+
 describe("设置页：关闭窗口行为", () => {
   it("默认选中最小化到托盘", async () => {
     mockInvoke.mockImplementation(async (cmd: string) => {

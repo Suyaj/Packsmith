@@ -2,6 +2,7 @@ import { Route, Routes } from "react-router-dom";
 import AppLayout from "@/components/AppLayout";
 import HomePage from "@/pages/HomePage";
 import ProjectsPage from "@/pages/ProjectsPage";
+import HistoryPage from "@/pages/HistoryPage";
 import ServersPage from "@/pages/ServersPage";
 import SettingsPage from "@/pages/SettingsPage";
 
@@ -11,6 +12,7 @@ function App() {
       <Route element={<AppLayout />}>
         <Route path="/" element={<HomePage />} />
         <Route path="/projects" element={<ProjectsPage />} />
+        <Route path="/history" element={<HistoryPage />} />
         <Route path="/servers" element={<ServersPage />} />
         <Route path="/settings" element={<SettingsPage />} />
       </Route>

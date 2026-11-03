@@ -9,6 +9,10 @@
 pub mod key;
 /// 项目 (Project) records: persistence, validation, clone + import flows.
 pub mod projects;
+/// 构建历史 (Build History): per-build records, artifact listing, retention.
+pub mod history;
+/// 应用设置（app_meta key/value 层，ticket 08）。
+pub mod settings;
 mod migrations;
 
 use std::path::Path;
@@ -32,6 +36,8 @@ pub enum StoreError {
     InvalidKey,
     /// SQLCipher is not linked into this build (plain SQLite instead) — refuse to open.
     SqlCipherMissing,
+    /// A settings value is rejected by validation.
+    InvalidSetting(String),
 }
 
 impl std::fmt::Display for StoreError {
@@ -49,6 +55,7 @@ impl std::fmt::Display for StoreError {
             StoreError::SqlCipherMissing => {
                 write!(f, "SQLCipher is not linked into this build")
             }
+            StoreError::InvalidSetting(v) => write!(f, "invalid setting: {v}"),
         }
     }
 }
@@ -59,6 +66,7 @@ impl std::error::Error for StoreError {
             StoreError::Io(e) => Some(e),
             StoreError::Sql(e) => Some(e),
             StoreError::Keyring(e) => Some(e),
+            StoreError::InvalidSetting(_) => None,
             _ => None,
         }
     }

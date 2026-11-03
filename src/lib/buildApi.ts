@@ -18,6 +18,8 @@ export type Project = {
   last_branch?: string | null;
   /** 项目构建命令（ticket 07），随项目可编辑。 */
   build_command: string;
+  /** 项目记住的默认构件选择（ticket 08）；从未选择过为 undefined。 */
+  default_artifact?: string | null;
   created_at: string;
 };
 
@@ -33,6 +35,11 @@ export type PreparedWorkspace = { path: string };
 /** 实时拉取项目分支列表（git 项目拉其 URL；本地导入项目拉本地路径）。 */
 export function listRemoteBranches(projectId: number): Promise<string[]> {
   return invoke("list_remote_branches", { projectId });
+}
+
+/** 列出全部项目（按创建时间先后）。 */
+export function listProjects(): Promise<Project[]> {
+  return invoke("list_projects");
 }
 
 /** 发起打包前半段：创建临时工作区并 clone 所选分支，成功即记住该分支。 */
@@ -70,6 +77,19 @@ export type BuildOutcome = {
   build_id: string;
   /** 持久化构建日志的绝对路径（失败后仍可读取）。 */
   log_path: string;
+  /** 构件库目录 `<appdata>/artifacts/<项目>/<构建时间>/`（成功构建才有）。 */
+  artifacts_dir: string | null;
+  /** 入库的构件列表（多构件时用户勾选默认）。 */
+  artifacts: ScannedArtifact[];
+  /** 构建历史记录 id。 */
+  history_id: number | null;
+};
+
+/** 扫描到的构件（ticket 08）。 */
+export type ScannedArtifact = {
+  relative_path: string;
+  file_name: string;
+  size: number;
 };
 
 /** 发起完整打包：准备临时工作区 → 托管工具链构建 → 清理，事件实时推送。 */
@@ -89,4 +109,9 @@ export function updateBuildCommand(projectId: number, command: string): Promise<
 /** 读取一次构建的持久化日志（按 build_id）。 */
 export function readBuildLog(buildId: string): Promise<string> {
   return invoke("read_build_log", { buildId });
+}
+
+/** 记住项目的默认构件选择（ticket 08：多构件构建时用户勾选的结果）。 */
+export function setDefaultArtifact(projectId: number, artifact: string): Promise<Project> {
+  return invoke("set_default_artifact", { projectId, artifact });
 }

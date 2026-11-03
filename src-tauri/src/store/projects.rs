@@ -85,6 +85,10 @@ pub struct Project {
     /// [`DEFAULT_BUILD_COMMAND`]（迁移 v6 落库默认值）。
     #[serde(default)]
     pub build_command: String,
+    /// 该项目记住的默认构件选择（ticket 08，迁移 v7）：多构件构建时用户
+    /// 勾选的结果；单构件构建自动选中。从未选择过为 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_artifact: Option<String>,
     pub created_at: String,
 }
 
@@ -176,6 +180,7 @@ fn row_to_project(row: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
             .expect("project_type is CHECK-constrained to known values"),
         last_branch: row.get("last_branch")?,
         build_command: row.get("build_command")?,
+        default_artifact: row.get("default_artifact")?,
         created_at: row.get("created_at")?,
     })
 }
@@ -184,7 +189,7 @@ fn row_to_project(row: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
 pub fn list(store: &Store) -> Result<Vec<Project>, ProjectError> {
     let rows = store.with(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT id, name, source, url, path, project_type, last_branch, build_command, created_at
+            "SELECT id, name, source, url, path, project_type, last_branch, build_command, default_artifact, created_at
              FROM projects ORDER BY created_at, id",
         )?;
         let rows = stmt
@@ -247,7 +252,7 @@ pub fn get(store: &Store, id: i64) -> Result<Option<Project>, ProjectError> {
     let project = store.with(|conn| {
         Ok(conn
             .query_row(
-                "SELECT id, name, source, url, path, project_type, last_branch, build_command, created_at
+                "SELECT id, name, source, url, path, project_type, last_branch, build_command, default_artifact, created_at
                  FROM projects WHERE id = ?1",
                 [id],
                 row_to_project,
@@ -342,7 +347,7 @@ pub fn import(
 
 fn get_in(conn: &rusqlite::Connection, id: i64) -> rusqlite::Result<Option<Project>> {
     conn.query_row(
-        "SELECT id, name, source, url, path, project_type, last_branch, build_command, created_at
+        "SELECT id, name, source, url, path, project_type, last_branch, build_command, default_artifact, created_at
          FROM projects WHERE id = ?1",
         [id],
         row_to_project,
@@ -376,6 +381,27 @@ pub fn set_build_command(
         conn.execute(
             "UPDATE projects SET build_command = ?1 WHERE id = ?2",
             rusqlite::params![command.trim(), project_id],
+        )?;
+        Ok(())
+    })?;
+    Ok(())
+}
+
+/// 记住项目的默认构件选择（ticket 08）：多构件构建时用户勾选的结果，下次
+/// 打开构件勾选时默认选中。空值拒绝（清除选择暂无 UI 入口）。
+pub fn set_default_artifact(
+    store: &Store,
+    project_id: i64,
+    artifact: &str,
+) -> Result<(), ProjectError> {
+    let trimmed = artifact.trim();
+    if trimmed.is_empty() {
+        return Err(ProjectError::InvalidName(artifact.to_string()));
+    }
+    store.with(|conn| {
+        conn.execute(
+            "UPDATE projects SET default_artifact = ?1 WHERE id = ?2",
+            rusqlite::params![trimmed, project_id],
         )?;
         Ok(())
     })?;

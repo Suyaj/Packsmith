@@ -80,6 +80,22 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     },
     Migration {
         version: 7,
+        name: "ticket 08: build_history (构建历史) + projects.default_artifact (记住默认构件选择)",
+        sql: "ALTER TABLE projects ADD COLUMN default_artifact TEXT;
+        CREATE TABLE build_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            build_id TEXT NOT NULL UNIQUE,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            branch TEXT NOT NULL,
+            success INTEGER NOT NULL CHECK (success IN (0, 1)),
+            exit_code INTEGER,
+            log_path TEXT NOT NULL,
+            artifacts_dir TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        );",
+    },
+    Migration {
+        version: 8,
         name: "ticket 11: 关窗行为设置默认值 (close_window_behavior)",
         sql: "INSERT OR IGNORE INTO app_meta (key, value) VALUES ('close_window_behavior', 'minimize');",
     },

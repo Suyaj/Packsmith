@@ -16,11 +16,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use git2::Direction;
 use serde::{Deserialize, Serialize};
 
+use crate::store::history;
 use crate::store::projects::{self, CancelFlag, ProjectError, Project};
 use crate::store::Store;
 
 pub use crate::store::projects::CloneStage;
 
+pub mod artifacts;
 pub mod commands;
 pub mod exec;
 
@@ -54,6 +56,9 @@ pub enum BuildError {
     /// 指定 id 的项目不存在。
     #[error("project {0} not found")]
     ProjectNotFound(i64),
+    /// 构件入库 / 历史记录 / 保留策略失败（ticket 08）。
+    #[error("history error: {0}")]
+    History(#[from] crate::store::history::HistoryError),
     #[error("store error: {0}")]
     Store(#[from] crate::store::StoreError),
     #[error("project error: {0}")]
@@ -75,6 +80,7 @@ impl BuildError {
             BuildError::LogNotFound(_) => "log_not_found",
             BuildError::Join(_) => "internal",
             BuildError::ProjectNotFound(_) => "project_not_found",
+            BuildError::History(_) => "history",
             BuildError::Store(_) => "store",
             BuildError::Project(_) => "project_not_found",
             BuildError::Io(_) => "io",
@@ -245,6 +251,12 @@ pub struct BuildOutcome {
     pub build_id: String,
     /// 持久化构建日志的绝对路径（失败后仍可读取）。
     pub log_path: String,
+    /// 构件库目录 `<appdata>/artifacts/<项目>/<构建时间>/`（成功构建才有）。
+    pub artifacts_dir: Option<String>,
+    /// 入库的构件列表（相对临时工作区的路径，入库即删除工作区）。
+    pub artifacts: Vec<artifacts::ScannedArtifact>,
+    /// 构建历史记录 id（成功与失败构建都有）。
+    pub history_id: Option<i64>,
 }
 
 /// 构建日志文件：逐行追加，进程读取任务与流程本身共享。
@@ -390,6 +402,57 @@ pub async fn run_build_flow_in(
 
     match result {
         Ok(outcome) => {
+            // —— 构件入库 + 历史记录（都在删除临时工作区之前）——
+            let library = (|| -> Result<
+                (Vec<artifacts::ScannedArtifact>, Option<String>, i64),
+                BuildError,
+            > {
+                let (artifacts, artifacts_dir) = if outcome.success {
+                    log.write("[Packsmith] 扫描构建产物…");
+                    let scanned = artifacts::scan_workspace_artifacts(&ws_path);
+                    if scanned.is_empty() {
+                        log.write("[Packsmith] 未在 target 目录中发现 jar/war 构件");
+                    }
+                    let dir = artifacts::artifacts_dir_for(appdata, &project.name, SystemTime::now());
+                    artifacts::copy_artifacts_into_library(&ws_path, &scanned, &dir)?;
+                    log.write(&format!("[Packsmith] 构件已入库: {}", dir.display()));
+                    (scanned, Some(dir))
+                } else {
+                    (Vec::new(), None)
+                };
+                // 构建历史：成败都记录；失败只有日志没有构件目录。
+                let history_id = history::record(
+                    &store,
+                    &history::NewHistoryEntry {
+                        build_id: build_id.clone(),
+                        project_id,
+                        branch: branch.to_string(),
+                        success: outcome.success,
+                        exit_code: outcome.exit_code,
+                        log_path: log_path.to_string_lossy().into_owned(),
+                        artifacts_dir: artifacts_dir
+                            .as_ref()
+                            .map(|d| d.to_string_lossy().into_owned()),
+                    },
+                )?;
+                // 单构件自动选中并记住为项目默认；多构件由用户在 UI 勾选。
+                if artifacts.len() == 1 {
+                    projects::set_default_artifact(&store, project_id, &artifacts[0].file_name)?;
+                }
+                // 保留策略：每项目只留最近 N 次（设置页可配，默认 10）。
+                history::enforce_retention(&store, appdata, project_id)?;
+                Ok((artifacts, artifacts_dir.map(|d| d.to_string_lossy().into_owned()), history_id))
+            })();
+
+            let (artifacts, artifacts_dir, history_id) = match library {
+                Ok(v) => v,
+                Err(e) => {
+                    log.write(&format!("[Packsmith] 构件入库失败: {e}"));
+                    cleanup();
+                    return Err(e);
+                }
+            };
+
             if outcome.success {
                 log.write(&format!(
                     "[Packsmith] 构建成功 (exit code {:?})",
@@ -407,6 +470,9 @@ pub async fn run_build_flow_in(
                 exit_code: outcome.exit_code,
                 build_id,
                 log_path: log_path.to_string_lossy().into_owned(),
+                artifacts_dir,
+                artifacts,
+                history_id: Some(history_id),
             })
         }
         Err(e) => {

@@ -29,6 +29,12 @@ impl From<BuildError> for ApiError {
     }
 }
 
+impl From<crate::store::history::HistoryError> for ApiError {
+    fn from(e: crate::store::history::HistoryError) -> Self {
+        ApiError::raw(e.code(), e.to_string())
+    }
+}
+
 /// 注册/注销一个打包任务并刷新托盘的构建状态提示（注册表非空 = 打包进行中）。
 fn register_build(
     app: &AppHandle,
@@ -203,4 +209,91 @@ pub fn read_build_log(app: AppHandle, build_id: String) -> Result<String, ApiErr
         .app_data_dir()
         .map_err(|e| ApiError::raw("io", e.to_string()))?;
     build::read_build_log(&appdata, &build_id).map_err(Into::into)
+}
+
+// ---------------------------------------------------------------------------
+// 构建历史与构件库（ticket 08）
+// ---------------------------------------------------------------------------
+
+fn app_data_dir(app: &AppHandle) -> Result<std::path::PathBuf, ApiError> {
+    app.path()
+        .app_data_dir()
+        .map_err(|e| ApiError::raw("io", e.to_string()))
+}
+
+/// 构建历史列表（跨项目，最近在前）；`limit` 只取最近 N 条（首页概览用）。
+#[tauri::command]
+pub fn list_build_history(
+    store: State<'_, Store>,
+    limit: Option<i64>,
+) -> Result<Vec<crate::store::history::HistoryEntry>, ApiError> {
+    crate::store::history::list(&store, limit).map_err(Into::into)
+}
+
+/// 某项目的构建历史（最近在前）。
+#[tauri::command]
+pub fn list_project_build_history(
+    store: State<'_, Store>,
+    project_id: i64,
+) -> Result<Vec<crate::store::history::HistoryEntry>, ApiError> {
+    crate::store::history::list_for_project(&store, project_id).map_err(Into::into)
+}
+
+/// 一次构建入库的构件文件列表（按文件名排序）。
+#[tauri::command]
+pub fn list_build_artifacts(
+    store: State<'_, Store>,
+    history_id: i64,
+) -> Result<Vec<crate::store::history::ArtifactFile>, ApiError> {
+    let entry = crate::store::history::list(&store, None)?
+        .into_iter()
+        .find(|e| e.id == history_id)
+        .ok_or(crate::store::history::HistoryError::NotFound(history_id))?;
+    crate::store::history::list_artifacts(&entry).map_err(Into::into)
+}
+
+/// 删除一条构建历史（构件目录 + 构建日志 + 记录行）。
+#[tauri::command]
+pub fn delete_build_history(
+    app: AppHandle,
+    store: State<'_, Store>,
+    history_id: i64,
+) -> Result<(), ApiError> {
+    crate::store::history::delete_entry(&store, &app_data_dir(&app)?, history_id)
+        .map_err(Into::into)
+}
+
+/// 手动清理：清空某项目的全部构建历史与构件。
+#[tauri::command]
+pub fn cleanup_project_history(
+    app: AppHandle,
+    store: State<'_, Store>,
+    project_id: i64,
+) -> Result<(), ApiError> {
+    crate::store::history::clear_project(&store, &app_data_dir(&app)?, project_id)
+        .map_err(Into::into)
+}
+
+/// 构件库保留次数（每项目保留最近 N 次构建）。
+#[tauri::command]
+pub fn get_build_retention(store: State<'_, Store>) -> Result<i64, ApiError> {
+    crate::store::settings::get_build_retention(&store).map_err(Into::into)
+}
+
+/// 保存构件库保留次数（≥ 1）。
+#[tauri::command]
+pub fn set_build_retention(store: State<'_, Store>, retention: i64) -> Result<(), ApiError> {
+    crate::store::settings::set_build_retention(&store, retention).map_err(Into::into)
+}
+
+/// 记住项目的默认构件选择（多构件构建时用户勾选的结果）。
+#[tauri::command]
+pub fn set_default_artifact(
+    store: State<'_, Store>,
+    project_id: i64,
+    artifact: String,
+) -> Result<Project, ApiError> {
+    projects::get(&store, project_id)?.ok_or(ProjectError::ProjectNotFound(project_id))?;
+    projects::set_default_artifact(&store, project_id, &artifact).map_err(ApiError::from)?;
+    Ok(projects::get(&store, project_id)?.expect("project was just updated"))
 }

@@ -33,6 +33,22 @@ const outcomeOk = {
   exit_code: 0,
   build_id: "build-7-1000",
   log_path: "/appdata/build-logs/build-7-1000.log",
+  artifacts_dir: "/appdata/artifacts/demo-app/20261103-120000",
+  artifacts: [{ relative_path: "target/app-1.0.jar", file_name: "app-1.0.jar", size: 1024 }],
+  history_id: 1,
+};
+
+const outcomeOkMulti = {
+  success: true,
+  exit_code: 0,
+  build_id: "build-7-1002",
+  log_path: "/appdata/build-logs/build-7-1002.log",
+  artifacts_dir: "/appdata/artifacts/demo-app/20261103-130000",
+  artifacts: [
+    { relative_path: "module-a/target/a-api-1.0.jar", file_name: "a-api-1.0.jar", size: 100 },
+    { relative_path: "module-b/target/b-web-1.0.war", file_name: "b-web-1.0.war", size: 200 },
+  ],
+  history_id: 2,
 };
 
 const outcomeFailed = {
@@ -40,6 +56,9 @@ const outcomeFailed = {
   exit_code: 1,
   build_id: "build-7-1001",
   log_path: "/appdata/build-logs/build-7-1001.log",
+  artifacts_dir: null,
+  artifacts: [],
+  history_id: 3,
 };
 
 function renderPanel(project: Project = gitProject, onClose = () => {}) {
@@ -143,6 +162,80 @@ describe("打包面板（构建命令编辑）", () => {
     await userEvent.click(screen.getByRole("button", { name: "保存命令" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("仅支持 mvnd");
+  });
+});
+
+describe("打包面板（构件选择）", () => {
+  it("单构件构建自动选中：展示构件名，不再弹出勾选", async () => {
+    await openPanelWithBranches({ start_build: () => outcomeOk });
+
+    await userEvent.click(screen.getByRole("button", { name: "开始打包" }));
+
+    expect(await screen.findByText(/已自动选中构件/)).toBeInTheDocument();
+    expect(screen.queryByRole("radiogroup")).not.toBeInTheDocument();
+    expect(mockInvoke).not.toHaveBeenCalledWith(
+      "set_default_artifact",
+      expect.anything(),
+    );
+  });
+
+  it("多构件构建弹出勾选：项目默认构件预选中，确认后保存为默认", async () => {
+    await openPanelWithBranches({
+      start_build: () => outcomeOkMulti,
+      set_default_artifact: (args) => {
+        expect(args).toMatchObject({ projectId: 7, artifact: "b-web-1.0.war" });
+        return { ...gitProject, default_artifact: "b-web-1.0.war" };
+      },
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "开始打包" }));
+
+    const group = await screen.findByRole("radiogroup", { name: "构件选择" });
+    const a = screen.getByRole("radio", { name: /a-api-1\.0\.jar/ }) as HTMLInputElement;
+    const b = screen.getByRole("radio", { name: /b-web-1\.0\.war/ }) as HTMLInputElement;
+    expect(group).toBeInTheDocument();
+    // 无默认时预选第一个构件。
+    expect(a.checked).toBe(true);
+    expect(b.checked).toBe(false);
+
+    await userEvent.click(b);
+    await userEvent.click(screen.getByRole("button", { name: "保存默认构件" }));
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("set_default_artifact", {
+        projectId: 7,
+        artifact: "b-web-1.0.war",
+      });
+    });
+    expect(await screen.findByText("默认构件已保存")).toBeInTheDocument();
+  });
+
+  it("项目已有默认构件时勾选默认预选中", async () => {
+    await openPanelWithBranches(
+      { start_build: () => outcomeOkMulti },
+      { ...gitProject, default_artifact: "b-web-1.0.war" },
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "开始打包" }));
+
+    const b = (await screen.findByRole("radio", {
+      name: /b-web-1\.0\.war/,
+    })) as HTMLInputElement;
+    await waitFor(() => expect(b.checked).toBe(true));
+  });
+
+  it("保存默认构件失败时展示后端错误", async () => {
+    await openPanelWithBranches({
+      start_build: () => outcomeOkMulti,
+      set_default_artifact: () => {
+        throw { code: "store", message: "store error" };
+      },
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "开始打包" }));
+    await userEvent.click(await screen.findByRole("button", { name: "保存默认构件" }));
+
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
   });
 });
 
