@@ -18,6 +18,7 @@
     "refresh": "刷新",
     "refreshPlaceholder": "刷新（v1 预留，暂未实现远程刷新）",
     "listTitle": "项目列表",
+    "targetsButton": "部署目标",
     "columns": {
       "name": "名称",
       "source": "来源",
@@ -99,6 +100,39 @@
       "hostKeyUpdate": "更新指纹并重试",
       "fingerprint": "指纹：{{fingerprint}}",
       "cancel": "取消"
+    }
+  },
+  "targets": {
+    "title": "{{project}} 的部署目标",
+    "empty": "尚未配置部署目标",
+    "add": "新建部署目标",
+    "edit": "编辑",
+    "delete": "删除",
+    "cancel": "取消",
+    "save": "保存",
+    "formTitleNew": "新建部署目标",
+    "formTitleEdit": "编辑部署目标",
+    "confirmDelete": "确定删除该部署目标吗？",
+    "loadFailed": "加载部署目标失败：{{detail}}",
+    "saveFailed": "保存失败：{{detail}}",
+    "server": "服务器",
+    "serverPlaceholder": "请选择服务器",
+    "serverMissing": "服务器 #{{serverId}}（已删除）",
+    "uploadDir": "上传目录",
+    "uploadDirValue": "上传目录：{{value}}",
+    "uploadDirHint": "构件将以原文件名覆盖上传到该目录",
+    "startCommands": "启动命令组",
+    "stopCommands": "停止命令组",
+    "commandsHint": "每行一条命令，按顺序执行",
+    "errors": {
+      "serverRequired": "请选择服务器",
+      "uploadDirRequired": "上传目录不能为空",
+      "uploadDirMultiline": "上传目录只能是一行路径",
+      "missing_project": "所属项目不存在",
+      "missing_server": "所选服务器不存在，请重新选择",
+      "duplicate_binding": "该项目已绑定此服务器",
+      "store": "数据保存失败",
+      "unknown": "操作失败：{{message}}"
     }
   },
   "settings": {

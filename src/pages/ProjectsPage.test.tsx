@@ -226,4 +226,45 @@ describe("项目管理页", () => {
     // 表单在取消克隆期间保持打开（等待后端返回结果）
     expect(screen.getByRole("button", { name: "取消克隆" })).toBeInTheDocument();
   });
+
+  it("点击项目行的“部署目标”按钮展开该项目的部署目标面板", async () => {
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "list_projects") return demoProjects;
+      if (cmd === "list_servers") {
+        return [
+          {
+            id: 11,
+            host: "web-1.example.com",
+            port: 22,
+            username: "deploy",
+            credential: { type: "password", password: "s3cret" },
+          },
+        ];
+      }
+      if (cmd === "list_deployment_targets") {
+        return [
+          {
+            id: 1,
+            projectId: 1,
+            serverId: 11,
+            uploadDir: "/home/app",
+            startCommands: "cd /home/app\nsh start.sh start",
+            stopCommands: "sh start.sh stop",
+          },
+        ];
+      }
+      throw new Error(`unexpected command ${cmd}`);
+    });
+
+    renderPage();
+
+    await userEvent.click(
+      (await screen.findAllByRole("button", { name: /部署目标/ }))[0],
+    );
+
+    expect(
+      await screen.findByText("demo-app 的部署目标"),
+    ).toBeInTheDocument();
+    expect(await screen.findByText("web-1.example.com:22 — deploy")).toBeInTheDocument();
+  });
 });
