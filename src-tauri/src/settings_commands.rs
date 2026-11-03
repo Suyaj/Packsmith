@@ -25,7 +25,9 @@ impl From<crate::store::StoreError> for ApiError {
 #[tauri::command]
 pub fn get_close_window_behavior(app: AppHandle) -> Result<String, ApiError> {
     let store = app.state::<Store>();
-    Ok(settings::get_close_window_behavior(&store)?.as_str().to_string())
+    Ok(settings::get_close_window_behavior(&store)?
+        .as_str()
+        .to_string())
 }
 
 /// 保存关闭窗口行为设置（设置页切换后立即生效——下一次关窗即按新值处置）。

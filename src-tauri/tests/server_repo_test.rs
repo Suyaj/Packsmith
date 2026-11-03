@@ -9,8 +9,7 @@
 
 use packsmith_lib::server::repo::{self, Credential, NewServer, Server};
 
-const TEST_KEY_HEX: &str =
-    "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
+const TEST_KEY_HEX: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
 
 fn open_store() -> (tempfile::TempDir, packsmith_lib::store::Store) {
     let dir = tempfile::tempdir().unwrap();

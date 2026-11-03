@@ -14,8 +14,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use packsmith_lib::build::{self, BuildError, BuildEvent, CloneStage};
-use packsmith_lib::store::projects::{self, ProjectType};
 use packsmith_lib::store::Store;
+use packsmith_lib::store::projects::{self, ProjectType};
 
 const TEST_KEY_HEX: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
 
@@ -129,7 +129,12 @@ fn workspaces_in(root: &Path) -> Vec<PathBuf> {
             entries
                 .flatten()
                 .map(|e| e.path())
-                .filter(|p| p.file_name().unwrap().to_string_lossy().starts_with("packsmith-build-"))
+                .filter(|p| {
+                    p.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with("packsmith-build-")
+                })
                 .collect()
         })
         .unwrap_or_default()
@@ -186,18 +191,27 @@ async fn 成功构建_日志完整_工作区无残留_依赖仓库目录建立()
 
     // 构建命令（含追加的依赖仓库参数）确实传给了托管 mvnd
     let lines = log_lines(&events);
-    assert!(lines.iter().any(|l| l.contains("arg:package")), "lines: {lines:?}");
+    assert!(
+        lines.iter().any(|l| l.contains("arg:package")),
+        "lines: {lines:?}"
+    );
     let repo_flag = lines
         .iter()
         .find(|l| l.starts_with("arg:-Dmaven.repo.local="))
         .expect("repo-local flag must be passed to mvnd");
     assert_eq!(
         repo_flag.as_str(),
-        format!("arg:-Dmaven.repo.local={}", fx.appdata.join("m2-repo").display())
+        format!(
+            "arg:-Dmaven.repo.local={}",
+            fx.appdata.join("m2-repo").display()
+        )
     );
 
     // 临时工作区一律删除
-    assert!(workspaces_in(&fx.temp_root).is_empty(), "temp workspace must be removed");
+    assert!(
+        workspaces_in(&fx.temp_root).is_empty(),
+        "temp workspace must be removed"
+    );
 
     // 依赖仓库目录首次构建即创建，且持久保留
     assert!(fx.appdata.join("m2-repo").is_dir());
@@ -292,14 +306,17 @@ async fn 取消构建_子进程被杀死_工作区无残留_报取消错误() {
         .expect("cancelled flow must return promptly (child killed, not leaked)")
         .unwrap();
 
-    assert!(matches!(
-        result,
-        Err(BuildError::Cancelled)
-    ));
-    assert!(workspaces_in(&fx.temp_root).is_empty(), "cancel must clean the workspace");
+    assert!(matches!(result, Err(BuildError::Cancelled)));
+    assert!(
+        workspaces_in(&fx.temp_root).is_empty(),
+        "cancel must clean the workspace"
+    );
     // 脚本先输出 started 再长睡：取消后日志里应有该行（进程被杀，不再有输出）。
     let lines = log_lines(&events);
-    assert!(lines.iter().any(|l| l.contains("started")), "lines: {lines:?}");
+    assert!(
+        lines.iter().any(|l| l.contains("started")),
+        "lines: {lines:?}"
+    );
 }
 
 #[cfg(unix)]
@@ -367,7 +384,9 @@ async fn 构建日志可按id读回_非法id被拒绝() {
 async fn 真实托管mvnd构建最小maven项目_依赖落在独立仓库() {
     // 从真实 appdata（macOS）解析托管工具链；未安装则跳过。
     let home = std::env::var("HOME").unwrap();
-    let tools = PathBuf::from(format!("{home}/Library/Application Support/com.wyy.packsmith/tools"));
+    let tools = PathBuf::from(format!(
+        "{home}/Library/Application Support/com.wyy.packsmith/tools"
+    ));
     if !tools.join("mvnd").is_dir() || !tools.join("jdk").is_dir() {
         eprintln!("skipping: managed toolchain not installed at {tools:?}");
         return;
@@ -385,14 +404,7 @@ async fn 真实托管mvnd构建最小maven项目_依赖落在独立仓库() {
     let cancel = projects::new_cancel_flag();
 
     let outcome = build::run_build_flow_in(
-        store,
-        &tools,
-        &appdata,
-        &temp_root,
-        project_id,
-        "main",
-        cancel,
-        on_event,
+        store, &tools, &appdata, &temp_root, project_id, "main", cancel, on_event,
     )
     .await
     .expect("real mvnd build must succeed");
@@ -406,7 +418,9 @@ async fn 真实托管mvnd构建最小maven项目_依赖落在独立仓库() {
     assert!(workspaces_in(&temp_root).is_empty());
     // 依赖确实下载进了独立仓库（ADR-0001），而非 ~/.m2。
     let m2 = appdata.join("m2-repo");
-    assert!(m2.join("org/apache/maven").is_dir() || m2.read_dir().unwrap().next().is_some(),
-        "m2-repo must be populated");
+    assert!(
+        m2.join("org/apache/maven").is_dir() || m2.read_dir().unwrap().next().is_some(),
+        "m2-repo must be populated"
+    );
     let _ = events.lock().unwrap().len();
 }

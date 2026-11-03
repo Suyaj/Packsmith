@@ -11,10 +11,10 @@
 
 use std::path::Path;
 
-use packsmith_lib::store::projects::{
-    self, new_cancel_flag, CloneProgress, CloneStage, ProjectError, ProjectSource, ProjectType,
-};
 use packsmith_lib::store::Store;
+use packsmith_lib::store::projects::{
+    self, CloneProgress, CloneStage, ProjectError, ProjectSource, ProjectType, new_cancel_flag,
+};
 
 const TEST_KEY_HEX: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
 
@@ -82,10 +82,7 @@ fn importing_a_local_path_registers_it_in_the_list() {
     assert_eq!(all[0].source, ProjectSource::Local);
     assert_eq!(all[0].url, None, "imported projects have no git URL");
     // 记录的路径是 canonicalize 后的绝对路径（macOS 上 /var 是 /private/var 的符号链接）。
-    assert_eq!(
-        all[0].path,
-        repo.canonicalize().unwrap().to_string_lossy()
-    );
+    assert_eq!(all[0].path, repo.canonicalize().unwrap().to_string_lossy());
 }
 
 #[test]
@@ -280,8 +277,14 @@ fn clone_and_register_clones_into_workspace_root_and_lists_the_project() {
         cloned.canonicalize().unwrap().to_string_lossy(),
         "record points at the cloned directory"
     );
-    assert!(cloned.join(".git").exists(), "clone produced a git repository");
-    assert!(cloned.join("README.md").exists(), "working tree was checked out");
+    assert!(
+        cloned.join(".git").exists(),
+        "clone produced a git repository"
+    );
+    assert!(
+        cloned.join("README.md").exists(),
+        "working tree was checked out"
+    );
 
     // 项目出现在列表。
     let all = projects::list(&store).unwrap();
@@ -497,7 +500,9 @@ fn last_used_branch_is_persisted_and_survives_reopening_the_store() {
 
 #[test]
 fn workspace_root_tilde_is_expanded_to_the_home_directory() {
-    let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap();
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap();
     assert_eq!(
         projects::expand_workspace_root("~/Packsmith/workspace"),
         Path::new(&home).join("Packsmith/workspace")
@@ -531,7 +536,9 @@ fn build_command_can_be_edited_and_persists_on_the_project() {
     let repo = fixture_repo(dir.path(), "edit-cmd-repo");
     let store = open_store(dir.path());
 
-    let id = projects::import(&store, "edit-cmd-repo", &repo, ProjectType::Maven).unwrap().id;
+    let id = projects::import(&store, "edit-cmd-repo", &repo, ProjectType::Maven)
+        .unwrap()
+        .id;
 
     projects::set_build_command(&store, id, "mvnd package -DskipTests -Pfast").unwrap();
 
@@ -551,7 +558,9 @@ fn build_command_must_not_be_blank() {
     let repo = fixture_repo(dir.path(), "blank-cmd-repo");
     let store = open_store(dir.path());
 
-    let id = projects::import(&store, "blank-cmd-repo", &repo, ProjectType::Maven).unwrap().id;
+    let id = projects::import(&store, "blank-cmd-repo", &repo, ProjectType::Maven)
+        .unwrap()
+        .id;
 
     assert!(matches!(
         projects::set_build_command(&store, id, "   "),

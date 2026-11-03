@@ -80,24 +80,12 @@ impl From<&Server> for ServerDto {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum TestOutcomeDto {
-    Success {
-        new_fingerprint: Option<String>,
-    },
-    HostKeyUnknown {
-        fingerprint: String,
-    },
-    HostKeyChanged {
-        fingerprint: String,
-    },
-    Unreachable {
-        detail: String,
-    },
-    AuthFailed {
-        method: AuthMethodDto,
-    },
-    KeyUnreadable {
-        detail: String,
-    },
+    Success { new_fingerprint: Option<String> },
+    HostKeyUnknown { fingerprint: String },
+    HostKeyChanged { fingerprint: String },
+    Unreachable { detail: String },
+    AuthFailed { method: AuthMethodDto },
+    KeyUnreadable { detail: String },
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -198,15 +186,20 @@ pub async fn test_server_connection(
     credential: CredentialPayload,
     accept_unknown_host_key: bool,
 ) -> Result<TestOutcomeDto, String> {
-    let stored_fingerprint = repo::known_host_fingerprint(&store, &host, port)
-        .map_err(|e| e.to_string())?;
+    let stored_fingerprint =
+        repo::known_host_fingerprint(&store, &host, port).map_err(|e| e.to_string())?;
     let request = TestRequest {
         host,
         port,
         username,
         credential: (&credential).into(),
     };
-    let outcome = ssh::test_connection(&request, stored_fingerprint.as_deref(), accept_unknown_host_key).await;
+    let outcome = ssh::test_connection(
+        &request,
+        stored_fingerprint.as_deref(),
+        accept_unknown_host_key,
+    )
+    .await;
     // Persist a fingerprint the user explicitly accepted during this test.
     if let TestOutcome::Success {
         new_fingerprint: Some(ref fingerprint),

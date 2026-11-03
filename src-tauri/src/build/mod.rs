@@ -16,9 +16,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use git2::Direction;
 use serde::{Deserialize, Serialize};
 
-use crate::store::history;
-use crate::store::projects::{self, CancelFlag, ProjectError, Project};
 use crate::store::Store;
+use crate::store::history;
+use crate::store::projects::{self, CancelFlag, Project, ProjectError};
 
 pub use crate::store::projects::CloneStage;
 
@@ -130,7 +130,8 @@ fn list_branches_via(repo: &git2::Repository, url: &str) -> Result<Vec<String>, 
             .filter_map(|name| name.strip_prefix("refs/heads/"))
             .filter(|name| !name.is_empty())
             .map(str::to_string)
-            .collect();        branches.sort();
+            .collect();
+        branches.sort();
         Ok(branches)
     };
     list()
@@ -174,14 +175,7 @@ pub fn prepare_workspace(
     cancel: &CancelFlag,
     on_progress: &mut dyn FnMut(projects::CloneProgress),
 ) -> Result<PreparedWorkspace, ProjectError> {
-    prepare_workspace_in(
-        store,
-        project_id,
-        branch,
-        cancel,
-        on_progress,
-        &temp_root(),
-    )
+    prepare_workspace_in(store, project_id, branch, cancel, on_progress, &temp_root())
 }
 
 /// [`prepare_workspace`] 的可注入临时根版本（测试用）。
@@ -218,10 +212,7 @@ fn get_project(store: &Store, project_id: i64) -> Result<Project, ProjectError> 
 /// 克隆来源：git 项目用其 URL；本地导入的项目直接对本地路径做 ls-remote /
 /// clone（同一 git2 通道，本地路径由 libgit2 本地传输支持）。
 fn source_url(project: &Project) -> String {
-    project
-        .url
-        .clone()
-        .unwrap_or_else(|| project.path.clone())
+    project.url.clone().unwrap_or_else(|| project.path.clone())
 }
 
 // ---------------------------------------------------------------------------
@@ -319,8 +310,8 @@ pub async fn run_build_flow_in(
     cancel: CancelFlag,
     on_event: Arc<dyn Fn(BuildEvent) + Send + Sync>,
 ) -> Result<BuildOutcome, BuildError> {
-    let project = projects::get(&store, project_id)?
-        .ok_or(BuildError::ProjectNotFound(project_id))?;
+    let project =
+        projects::get(&store, project_id)?.ok_or(BuildError::ProjectNotFound(project_id))?;
 
     // 依赖仓库目录：首次构建即创建，持久保留以复用缓存（ADR-0001）。
     let repo_local = appdata.join("m2-repo");

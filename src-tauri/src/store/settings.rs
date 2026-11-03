@@ -18,11 +18,9 @@ pub const DEFAULT_BUILD_RETENTION: i64 = 10;
 pub fn get(store: &Store, key: &str) -> Result<Option<String>, StoreError> {
     store.with(|conn| {
         Ok(conn
-            .query_row(
-                "SELECT value FROM app_meta WHERE key = ?1",
-                [key],
-                |r| r.get::<_, String>(0),
-            )
+            .query_row("SELECT value FROM app_meta WHERE key = ?1", [key], |r| {
+                r.get::<_, String>(0)
+            })
             .optional()?)
     })
 }

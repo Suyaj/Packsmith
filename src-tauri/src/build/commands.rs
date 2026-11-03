@@ -12,15 +12,15 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::sync::Mutex;
+use std::sync::atomic::Ordering;
 
 use tauri::{AppHandle, Manager, State};
 
-use crate::build::{self, exec, BuildError, BuildEvent, BuildOutcome, PreparedWorkspace};
+use crate::build::{self, BuildError, BuildEvent, BuildOutcome, PreparedWorkspace, exec};
 use crate::commands::ApiError;
-use crate::store::projects::{self, new_cancel_flag, CancelFlag, Project, ProjectError};
 use crate::store::Store;
+use crate::store::projects::{self, CancelFlag, Project, ProjectError, new_cancel_flag};
 use crate::tray;
 
 impl From<BuildError> for ApiError {
@@ -36,12 +36,7 @@ impl From<crate::store::history::HistoryError> for ApiError {
 }
 
 /// 注册/注销一个打包任务并刷新托盘的构建状态提示（注册表非空 = 打包进行中）。
-fn register_build(
-    app: &AppHandle,
-    registry: &BuildRegistry,
-    project_id: i64,
-    cancel: &CancelFlag,
-) {
+fn register_build(app: &AppHandle, registry: &BuildRegistry, project_id: i64, cancel: &CancelFlag) {
     {
         let mut slots = registry.0.lock().expect("build registry poisoned");
         slots.insert(project_id, cancel.clone());
@@ -75,10 +70,7 @@ pub async fn list_remote_branches(
         let store = app.state::<Store>();
         let project =
             projects::get(&store, project_id)?.ok_or(ProjectError::ProjectNotFound(project_id))?;
-        project
-            .url
-            .clone()
-            .unwrap_or_else(|| project.path.clone())
+        project.url.clone().unwrap_or_else(|| project.path.clone())
     };
 
     // ls-remote 可能等网络；放到阻塞线程池，不占主线程。
@@ -175,9 +167,16 @@ pub async fn start_build(
         let _ = on_event.send(event);
     };
 
-    let result =
-        build::run_build_flow(store, &tools_root, &appdata, project_id, &branch, cancel, Arc::new(sink))
-            .await;
+    let result = build::run_build_flow(
+        store,
+        &tools_root,
+        &appdata,
+        project_id,
+        &branch,
+        cancel,
+        Arc::new(sink),
+    )
+    .await;
 
     if let Some(registry) = app.try_state::<BuildRegistry>() {
         unregister_build(&app, &registry, project_id);
@@ -188,8 +187,11 @@ pub async fn start_build(
     // 构建成功后自动连锁部署（ticket 10）：对开着自动连锁开关的部署目标，
     // 后台触发部署。自动连锁失败不影响本次构建结果。
     if outcome.success {
-        let candidates: Vec<String> =
-            outcome.artifacts.iter().map(|a| a.file_name.clone()).collect();
+        let candidates: Vec<String> = outcome
+            .artifacts
+            .iter()
+            .map(|a| a.file_name.clone())
+            .collect();
         let default_artifact = {
             let store = app.state::<Store>();
             projects::get(&store, project_id)

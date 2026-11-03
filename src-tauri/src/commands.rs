@@ -11,16 +11,16 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
 use std::sync::Mutex;
+use std::sync::atomic::Ordering;
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
-use crate::store::projects::{
-    self, new_cancel_flag, CancelFlag, Project, ProjectError, ProjectType,
-};
 use crate::store::Store;
+use crate::store::projects::{
+    self, CancelFlag, Project, ProjectError, ProjectType, new_cancel_flag,
+};
 
 /// Clone 任务的取消标志注册表：按项目名称存取（同名同时只能有一个 clone，
 /// 由名称唯一性校验保证）。
@@ -127,7 +127,12 @@ pub async fn clone_project(
 /// 取消进行中的 clone（按项目名称）。
 #[tauri::command]
 pub fn cancel_clone(registry: State<'_, CloneRegistry>, name: String) {
-    if let Some(flag) = registry.0.lock().expect("clone registry poisoned").get(&name) {
+    if let Some(flag) = registry
+        .0
+        .lock()
+        .expect("clone registry poisoned")
+        .get(&name)
+    {
         flag.store(true, Ordering::Relaxed);
     }
 }

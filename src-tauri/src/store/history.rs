@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::OptionalExtension;
 use serde::Serialize;
 
-use super::{settings, Store, StoreError};
+use super::{Store, StoreError, settings};
 
 #[derive(Debug, thiserror::Error)]
 pub enum HistoryError {
@@ -135,10 +135,7 @@ pub fn list(store: &Store, limit: Option<i64>) -> Result<Vec<HistoryEntry>, Stor
 }
 
 /// 指定项目的构建历史，最近在前。
-pub fn list_for_project(
-    store: &Store,
-    project_id: i64,
-) -> Result<Vec<HistoryEntry>, StoreError> {
+pub fn list_for_project(store: &Store, project_id: i64) -> Result<Vec<HistoryEntry>, StoreError> {
     store.with(|conn| {
         let mut stmt = conn.prepare(&format!(
             "{SELECT} WHERE h.project_id = ?1 ORDER BY h.created_at DESC, h.id DESC"
@@ -225,7 +222,11 @@ fn library_root(appdata: &Path) -> PathBuf {
 
 /// 保留策略：每项目只保留最近 N 次构建（N 来自设置，默认 10）。超出的
 /// 条目连同其构件目录与日志一起删除。
-pub fn enforce_retention(store: &Store, appdata: &Path, project_id: i64) -> Result<(), HistoryError> {
+pub fn enforce_retention(
+    store: &Store,
+    appdata: &Path,
+    project_id: i64,
+) -> Result<(), HistoryError> {
     let keep = settings::get_build_retention(store)?;
     let entries = list_for_project(store, project_id)?;
     for entry in entries.iter().skip(keep.max(0) as usize) {

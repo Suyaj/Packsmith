@@ -12,13 +12,13 @@
 //! `bin` 与 mvnd 的 `bin` 前置到 PATH。
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use serde::Serialize;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-use crate::toolchain::{find_executable, ToolKind};
+use crate::toolchain::{ToolKind, find_executable};
 
 use super::BuildError;
 
@@ -43,10 +43,10 @@ pub struct SpawnSpec {
 /// 在托管工具链根目录内解析 mvnd 与 JDK 8（ADR-0001：只看 `tools/`，
 /// 绝不回退 PATH）。
 pub fn resolve_toolchain(tools_root: &Path) -> Result<ToolchainPaths, BuildError> {
-    let mvnd = find_executable(ToolKind::Mvnd, tools_root)
-        .ok_or(BuildError::ToolchainMissing("mvnd"))?;
-    let java = find_executable(ToolKind::Jdk, tools_root)
-        .ok_or(BuildError::ToolchainMissing("jdk"))?;
+    let mvnd =
+        find_executable(ToolKind::Mvnd, tools_root).ok_or(BuildError::ToolchainMissing("mvnd"))?;
+    let java =
+        find_executable(ToolKind::Jdk, tools_root).ok_or(BuildError::ToolchainMissing("jdk"))?;
     // java 位于 <home>/bin/java（含 macOS Contents/Home 布局），home 即其上级。
     let java_home = java
         .parent()
@@ -128,11 +128,7 @@ pub fn build_spawn_spec(
         args.push(format!("{}={}", REPO_LOCAL_FLAG, repo_local.display()));
     }
 
-    let jdk_bin = tc
-        .java_home
-        .join("bin")
-        .to_string_lossy()
-        .into_owned();
+    let jdk_bin = tc.java_home.join("bin").to_string_lossy().into_owned();
     let mvnd_bin = tc
         .mvnd
         .parent()
@@ -145,7 +141,10 @@ pub fn build_spawn_spec(
         program,
         args,
         env: vec![
-            ("JAVA_HOME".into(), tc.java_home.to_string_lossy().into_owned()),
+            (
+                "JAVA_HOME".into(),
+                tc.java_home.to_string_lossy().into_owned(),
+            ),
             ("PATH".into(), path),
         ],
     })
@@ -200,7 +199,10 @@ pub async fn execute_build(
         Some("cmd") | Some("bat")
     );
     let (program, args): (PathBuf, Vec<String>) = if is_script {
-        let mut a = vec!["/c".to_string(), spec.program.to_string_lossy().into_owned()];
+        let mut a = vec![
+            "/c".to_string(),
+            spec.program.to_string_lossy().into_owned(),
+        ];
         a.extend(spec.args.iter().cloned());
         (PathBuf::from("cmd"), a)
     } else {

@@ -10,7 +10,13 @@ fn fake_toolchain(tag: &str) -> (tempfile::TempDir, ToolchainPaths) {
     std::fs::write(&mvnd, "#!/bin/sh\n").unwrap();
     std::fs::write(&java, "fake java").unwrap();
     let _ = tag;
-    (dir, ToolchainPaths { mvnd, java_home: java.parent().unwrap().parent().unwrap().to_path_buf() })
+    (
+        dir,
+        ToolchainPaths {
+            mvnd,
+            java_home: java.parent().unwrap().parent().unwrap().to_path_buf(),
+        },
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -55,10 +61,7 @@ fn 空命令被拒绝() {
 #[test]
 fn 分词支持引号包裹的含空格参数() {
     let tokens = split_command(r#"mvnd test -Dtest="run one thing""#).unwrap();
-    assert_eq!(
-        tokens,
-        vec!["mvnd", "test", "-Dtest=run one thing"]
-    );
+    assert_eq!(tokens, vec!["mvnd", "test", "-Dtest=run one thing"]);
 }
 
 #[test]

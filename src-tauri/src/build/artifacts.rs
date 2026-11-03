@@ -35,15 +35,13 @@ pub fn scan_workspace_artifacts(workspace: &Path) -> Vec<ScannedArtifact> {
     out
 }
 
-fn walk_targets(
-    root: &Path,
-    dir: &Path,
-    out: &mut Vec<ScannedArtifact>,
-) -> std::io::Result<()> {
+fn walk_targets(root: &Path, dir: &Path, out: &mut Vec<ScannedArtifact>) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
-        let Ok(file_type) = entry.file_type() else { continue };
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
         if file_type.is_dir() {
             if entry.file_name() == "target" {
                 collect_artifacts(root, &path, out)?;
@@ -63,7 +61,9 @@ fn collect_artifacts(
 ) -> std::io::Result<()> {
     for entry in std::fs::read_dir(target_dir)?.collect::<Result<Vec<_>, _>>()? {
         let path = entry.path();
-        let Ok(file_type) = entry.file_type() else { continue };
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
         if file_type.is_dir() {
             collect_artifacts(root, &path, out)?;
         } else if is_artifact_name(&entry.file_name().to_string_lossy()) {
