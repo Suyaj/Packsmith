@@ -1,13 +1,16 @@
-//! Integration tests for the encrypted store (ticket 02).
+//! Integration tests for the encrypted store (ticket 02, key storage ticket 16).
 //!
 //! Seams under test:
 //! - `Store::open(path, key_hex)` — open + key + migrations
 //! - `Store::with(fn(&Connection))` — generic data access
 //! - the DB file itself — encryption is observable from outside
-//! - `store::key` — key generation/loading decision logic
+//! - `store::key` — key-file storage, legacy-keychain migration, resolution
+//!   order (file → keychain → generate)
 //!
 //! Tests never touch the OS keychain; `KeyringKeySource` is wired in app
-//! startup only.
+//! startup only and fakes stand in via the `KeySource` seam.
+
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use packsmith_lib::store::key;
 use packsmith_lib::store::{Store, StoreError};
@@ -220,54 +223,265 @@ fn generated_key_is_64_hex_chars() {
     assert_ne!(key::generate_key(), key::generate_key(), "keys are random");
 }
 
-#[test]
-fn key_source_returns_stored_key_on_subsequent_calls() {
-    use std::cell::RefCell;
+// ---------------------------------------------------------------------------
+// Key file (ticket 16, ADR-0003)
+// ---------------------------------------------------------------------------
 
-    // First run: no key in the vault -> generate, save, return it.
-    // Second run: key present -> return the same one.
-    let vault = RefCell::new(None);
-    fn is_no_entry(e: &key::KeyError) -> bool {
-        *e == key::KeyError::NoEntry
+/// A fake legacy keychain: returns the canned key (or None) and records
+/// whether `delete` was called. A `panic_on_load` variant stands in for
+/// "the keychain must never be touched".
+struct FakeKeychain {
+    key: Option<String>,
+    deleted: AtomicBool,
+}
+
+impl key::KeySource for FakeKeychain {
+    fn load(&self) -> Result<Option<String>, StoreError> {
+        Ok(self.key.clone())
     }
+    fn delete(&self) -> Result<(), StoreError> {
+        self.deleted.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+}
 
-    let first = key::load_or_create(
-        || vault.borrow_mut().clone().ok_or(key::KeyError::NoEntry),
-        |k: &str| {
-            *vault.borrow_mut() = Some(k.to_string());
-            Ok(())
-        },
-        is_no_entry,
-    )
-    .unwrap();
-    assert_eq!(first.len(), 64);
-    assert!(vault.borrow().is_some(), "generated key must be saved");
+/// A legacy source whose mere use is a bug — resolution step ① (db.key
+/// exists) must never reach it.
+struct PanicKeychain;
 
-    let second = key::load_or_create(
-        || vault.borrow_mut().clone().ok_or(key::KeyError::NoEntry),
-        |k: &str| {
-            *vault.borrow_mut() = Some(k.to_string());
-            Ok(())
-        },
-        is_no_entry,
-    )
-    .unwrap();
-    assert_eq!(first, second, "second run must reuse the stored key");
+impl key::KeySource for PanicKeychain {
+    fn load(&self) -> Result<Option<String>, StoreError> {
+        panic!("db.key exists: the keychain must not be touched")
+    }
+    fn delete(&self) -> Result<(), StoreError> {
+        panic!("db.key exists: the keychain must not be touched")
+    }
 }
 
 #[test]
-fn key_source_propagates_keychain_errors() {
-    let get = || -> Result<String, key::KeyError> {
-        Err(key::KeyError::Platform("access denied".into()))
-    };
-    let set = |_: &str| -> Result<(), key::KeyError> {
-        panic!("must not write when reading failed with a real error")
+fn file_key_source_round_trips_and_reports_absence() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = key::FileKeySource::new(dir.path());
+
+    assert!(
+        file.load().unwrap().is_none(),
+        "no key file yet must read as absent"
+    );
+
+    file.store(TEST_KEY_HEX).unwrap();
+    assert_eq!(file.load().unwrap().as_deref(), Some(TEST_KEY_HEX));
+    assert_eq!(file.path(), &dir.path().join("db.key"));
+}
+
+#[test]
+fn file_key_source_survives_trailing_whitespace() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db.key");
+    std::fs::write(&path, format!("{TEST_KEY_HEX}\n")).unwrap();
+
+    let file = key::FileKeySource::new(dir.path());
+    assert_eq!(file.load().unwrap().as_deref(), Some(TEST_KEY_HEX));
+}
+
+#[cfg(unix)]
+#[test]
+fn file_key_source_is_written_with_0600_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = key::FileKeySource::new(dir.path());
+
+    file.store(TEST_KEY_HEX).unwrap();
+
+    let mode = std::fs::metadata(file.path()).unwrap().permissions().mode();
+    assert_eq!(
+        mode & 0o777,
+        0o600,
+        "db.key must be readable by the current user only, got {:o}",
+        mode & 0o777
+    );
+}
+
+#[test]
+fn corrupt_or_empty_key_file_is_an_error_never_regenerated() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("db.key");
+
+    for garbage in ["", "not a key", &"a".repeat(63), &"g".repeat(64)] {
+        std::fs::write(&path, garbage).unwrap();
+        let file = key::FileKeySource::new(dir.path());
+        let err = key::resolve_key(&file, Some(&PanicKeychain)).unwrap_err();
+        assert!(
+            matches!(err, StoreError::InvalidKey),
+            "corrupt key file {garbage:?} must error, not regenerate, got {err:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            garbage,
+            "the corrupt file must be left untouched (data safety)"
+        );
+    }
+}
+
+#[test]
+fn fresh_install_generates_key_file_without_touching_keychain() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("packsmith.db");
+    let key_file = dir.path().join("db.key");
+
+    // No db file yet = fresh install: the keychain must not be touched even
+    // though db.key does not exist either.
+    let key1 = Store::open_with_legacy_source(&db, Some(&PanicKeychain))
+        .unwrap()
+        .cipher_version()
+        .unwrap();
+    assert!(!key1.is_empty());
+    assert!(key_file.exists(), "fresh install must create db.key");
+
+    // Second run: the stored key is reused (still no keychain access).
+    Store::open_with_legacy_source(&db, Some(&PanicKeychain)).unwrap();
+    let stored = std::fs::read_to_string(&key_file).unwrap();
+    assert_eq!(stored.trim().len(), 64);
+}
+
+#[test]
+fn legacy_keychain_errors_propagate_without_regenerating() {
+    struct BrokenKeychain;
+    impl key::KeySource for BrokenKeychain {
+        fn load(&self) -> Result<Option<String>, StoreError> {
+            Err(StoreError::Keyring(keyring::Error::NoDefaultStore))
+        }
+        fn delete(&self) -> Result<(), StoreError> {
+            panic!("must not delete when reading failed")
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = key::FileKeySource::new(dir.path());
+
+    let err = key::resolve_key(&file, Some(&BrokenKeychain)).unwrap_err();
+    assert!(
+        matches!(err, StoreError::Keyring(_)),
+        "a locked keychain must propagate, not trigger regeneration, got {err:?}"
+    );
+    assert!(
+        !file.path().exists(),
+        "a failed keychain read must not create a key file"
+    );
+}
+
+#[test]
+fn keychain_migration_moves_key_to_file_and_cleans_up() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = key::FileKeySource::new(dir.path());
+    let legacy = FakeKeychain {
+        key: Some(TEST_KEY_HEX.to_string()),
+        deleted: AtomicBool::new(false),
     };
 
-    let err = key::load_or_create(get, set, |e| *e == key::KeyError::NoEntry).unwrap_err();
+    let key = key::resolve_key(&file, Some(&legacy)).unwrap();
+    assert_eq!(key, TEST_KEY_HEX, "the migrated key must be the OLD key");
     assert_eq!(
-        err,
-        key::KeyError::Platform("access denied".into()),
-        "real keychain failures must propagate, not trigger regeneration"
+        file.load().unwrap().as_deref(),
+        Some(TEST_KEY_HEX),
+        "migration must write the key to db.key"
     );
+    assert!(
+        legacy.deleted.load(Ordering::SeqCst),
+        "migration must delete the keychain entry"
+    );
+
+    // After migration, the keychain is never touched again.
+    let key2 = key::resolve_key(&file, Some(&PanicKeychain)).unwrap();
+    assert_eq!(key2, TEST_KEY_HEX);
+}
+
+#[test]
+fn migration_uses_old_key_so_existing_database_stays_readable() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("packsmith.db");
+
+    // The "old install": data written with the key that currently lives in
+    // the keychain (no db.key yet).
+    {
+        let store = Store::open(&db, TEST_KEY_HEX).unwrap();
+        store
+            .with(|conn| {
+                conn.execute(
+                    "INSERT INTO app_meta (key, value) VALUES ('user-data', '真实数据')",
+                    [],
+                )
+            })
+            .unwrap();
+    }
+
+    // Upgrade: keychain holds the old key, db.key does not exist yet.
+    let legacy = FakeKeychain {
+        key: Some(TEST_KEY_HEX.to_string()),
+        deleted: AtomicBool::new(false),
+    };
+    let store = Store::open_with_legacy_source(&db, Some(&legacy)).unwrap();
+
+    let value: String = store
+        .with(|conn| {
+            conn.query_row(
+                "SELECT value FROM app_meta WHERE key = 'user-data'",
+                [],
+                |r| r.get(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(value, "真实数据", "user data must survive the migration");
+    assert!(
+        legacy.deleted.load(Ordering::SeqCst),
+        "keychain entry must be cleaned up"
+    );
+
+    // Reopen through the normal path (db.key now exists).
+    drop(store);
+    let store = Store::open_default(&db).unwrap();
+    let value: String = store
+        .with(|conn| {
+            conn.query_row(
+                "SELECT value FROM app_meta WHERE key = 'user-data'",
+                [],
+                |r| r.get(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(value, "真实数据");
+}
+
+#[test]
+fn fresh_install_via_store_creates_key_file_and_db() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("packsmith.db");
+
+    // `None` = pretend there is no keychain at all (fresh machine).
+    let store = Store::open_with_legacy_source(&db, None).unwrap();
+    store
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO app_meta (key, value) VALUES ('probe', 'ok')",
+                [],
+            )
+        })
+        .unwrap();
+    drop(store);
+
+    let key_file = dir.path().join("db.key");
+    assert!(key_file.exists(), "fresh install must create db.key");
+    let stored = std::fs::read_to_string(&key_file).unwrap();
+    assert_eq!(stored.trim().len(), 64, "db.key holds a 32-byte hex key");
+
+    // Reopen: same key from the file, data still there.
+    let store = Store::open_default(&db).unwrap();
+    let value: String = store
+        .with(|conn| {
+            conn.query_row("SELECT value FROM app_meta WHERE key = 'probe'", [], |r| {
+                r.get(0)
+            })
+        })
+        .unwrap();
+    assert_eq!(value, "ok");
 }

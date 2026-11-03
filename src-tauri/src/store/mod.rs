@@ -1,9 +1,11 @@
-//! Encrypted single-database store (ADR-0002).
+//! Encrypted single-database store (ADR-0002; key storage superseded by
+//! ADR-0003).
 //!
 //! One SQLCipher database holds all structured data and secrets. The
-//! encryption key is auto-generated on first run and kept in the OS keychain
-//! (`key` module). This module is the shared data-access and migration entry
-//! point for all later tickets.
+//! encryption key is auto-generated on first run and kept in the key file
+//! `<appdata>/db.key` (0600); the OS keychain is only consulted once for
+//! migration from pre-ticket-16 installs (`key` module). This module is the
+//! shared data-access and migration entry point for all later tickets.
 
 /// 构建历史 (Build History): per-build records, artifact listing, retention.
 pub mod history;
@@ -23,7 +25,7 @@ use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
 
-pub use key::{KeySource, KeyringKeySource};
+pub use key::{FileKeySource, KeySource, KeyringKeySource};
 
 /// Schema version after all declared migrations have been applied.
 pub const LATEST_SCHEMA_VERSION: i32 = migrations::LATEST_SCHEMA_VERSION;
@@ -190,10 +192,33 @@ impl Store {
         Ok(f(&conn)?)
     }
 
-    /// Opens the store using the production key source (OS keychain). This is
-    /// what app startup calls; tests pass keys explicitly via [`Store::open`].
+    /// Opens the store using the production key resolution (ADR-0003): key
+    /// file `<appdata>/db.key`, with a one-time legacy-keychain migration.
+    /// This is what app startup calls; tests pass keys explicitly via
+    /// [`Store::open`], or inject a fake legacy source via
+    /// [`Store::open_with_legacy_source`].
     pub fn open_default(path: &Path) -> Result<Self, StoreError> {
-        let key = KeyringKeySource::new().load_or_create()?;
+        Self::open_with_legacy_source(path, Some(&key::KeyringKeySource::new()))
+    }
+
+    /// Like [`Store::open_default`], but the legacy (keychain) source is
+    /// injectable for tests.
+    ///
+    /// Fresh-install heuristic (ADR-0003): if the database file does not
+    /// exist yet there is nothing to migrate, so the keychain is never
+    /// touched — fresh installs perform zero keychain access. An existing db
+    /// without a key file is treated as a pre-ticket-16 install and migrates
+    /// from the keychain.
+    pub fn open_with_legacy_source(
+        path: &Path,
+        legacy: Option<&dyn key::KeySource>,
+    ) -> Result<Self, StoreError> {
+        let dir = match path.parent() {
+            Some(p) if !p.as_os_str().is_empty() => p,
+            _ => Path::new("."),
+        };
+        let legacy = if path.exists() { legacy } else { None };
+        let key = key::resolve_key(&key::FileKeySource::new(dir), legacy)?;
         Store::open(path, &key)
     }
 }

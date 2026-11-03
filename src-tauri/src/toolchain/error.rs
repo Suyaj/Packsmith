@@ -15,6 +15,8 @@ pub enum ToolchainError {
     },
     #[error("解压安装包失败：{0}")]
     Archive(String),
+    #[error("可执行文件权限设置失败：{path}：{detail}")]
+    ExecBit { path: String, detail: String },
     #[error("本地文件操作失败：{0}")]
     Io(#[from] std::io::Error),
     #[error("{0} 正在下载中，请等待完成")]

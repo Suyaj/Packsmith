@@ -135,6 +135,7 @@
       "io": "读写磁盘失败：{{message}}",
       "unknown": "操作失败：{{message}}",
       "toolchain_missing": "托管工具链缺失：请先在设置页下载托管（{{message}}）",
+      "toolchain_exec_bit_failed": "可执行文件权限设置失败：请重试安装（{{message}}）",
       "unsupported_build_command": "构建命令不支持：仅支持 mvnd 开头的 Maven 命令（{{message}}）",
       "invalid_build_command": "构建命令无效：不能为空或引号未闭合（{{message}}）",
       "already_running": "该项目已有打包任务进行中",
