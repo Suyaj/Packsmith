@@ -169,6 +169,8 @@ pub fn clone_and_register(
     on_progress: &mut dyn FnMut(CloneProgress),
 ) -> Result<super::Project, ProjectError> {
     super::validate_name(name)?;
+    // clone 之前先拒绝不可创建的类型：不给无效项目留下半成品目录。
+    project_type.assert_creatable()?;
     validate_new_git(store, name, url)?;
 
     let root = expand_workspace_root(workspace_root);

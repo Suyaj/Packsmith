@@ -567,3 +567,66 @@ fn build_command_must_not_be_blank() {
         Err(ProjectError::InvalidBuildCommand(_))
     ));
 }
+
+// ---------------------------------------------------------------------------
+// v1 仅 Maven 可创建：Gradle 只能在 UI 以 disabled 占位出现，创建层拒绝
+// ---------------------------------------------------------------------------
+
+#[test]
+fn gradle_cannot_be_created_via_git_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open_store(dir.path());
+
+    let err = projects::create_git_record(
+        &store,
+        "gradle-app",
+        "https://example.com/gradle-app.git",
+        "/tmp/Packsmith/workspace/gradle-app",
+        ProjectType::Gradle,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        err,
+        ProjectError::UnsupportedCreationType(_)
+    ));
+    assert_eq!(err.code(), "unsupported_project_type");
+    assert!(projects::list(&store).unwrap().is_empty());
+}
+
+#[test]
+fn gradle_cannot_be_imported_from_local_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = fixture_repo(dir.path(), "gradle-local");
+    let store = open_store(dir.path());
+
+    let err = projects::import(&store, "gradle-local", &repo, ProjectType::Gradle).unwrap_err();
+
+    assert!(matches!(err, ProjectError::UnsupportedCreationType(_)));
+    assert_eq!(err.code(), "unsupported_project_type");
+    assert!(projects::list(&store).unwrap().is_empty());
+}
+
+#[test]
+fn gradle_cannot_be_cloned_and_registered() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = fixture_repo(dir.path(), "gradle-clone-repo");
+    let store = open_store(dir.path());
+
+    let err = projects::clone_and_register(
+        &store,
+        "gradle-clone",
+        &format!("file://{}", repo.display()),
+        &dir.path().join("workspace").to_string_lossy(),
+        ProjectType::Gradle,
+        &new_cancel_flag(),
+        &mut |_| {},
+    )
+    .unwrap_err();
+
+    // 拒绝发生在 clone 之前：目标目录不应被创建。
+    assert!(matches!(err, ProjectError::UnsupportedCreationType(_)));
+    assert_eq!(err.code(), "unsupported_project_type");
+    assert!(!dir.path().join("workspace").join("gradle-clone").exists());
+    assert!(projects::list(&store).unwrap().is_empty());
+}

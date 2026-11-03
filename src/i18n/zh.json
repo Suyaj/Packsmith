@@ -123,6 +123,7 @@
       "invalid_name": "项目名称不能为空且不能包含路径分隔符",
       "directory_exists": "目标目录已存在，请更换项目名称或工作区",
       "invalid_type": "不支持的项目类型",
+      "unsupported_project_type": "暂不支持创建该类型项目：v1 仅支持 Maven（Java）",
       "clone_failed": "克隆失败：{{message}}",
       "branch_listing_failed": "获取分支列表失败：{{message}}",
       "project_not_found": "项目不存在",
