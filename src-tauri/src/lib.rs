@@ -65,6 +65,9 @@ pub fn run() {
             settings_commands::get_git_account,
             settings_commands::set_git_account,
             settings_commands::clear_git_account,
+            settings_commands::get_mvnd_settings_xml,
+            settings_commands::set_mvnd_settings_xml,
+            settings_commands::clear_mvnd_settings_xml,
         ])
         .on_window_event(|window, event| {
             // 关窗行为随设置生效（ticket 11）：最小化到托盘 = 拦截关闭并隐藏；

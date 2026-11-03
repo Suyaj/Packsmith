@@ -1,7 +1,10 @@
-//! 设置相关 Tauri commands（ticket 11：关闭窗口行为；ticket 13：Git 账号）。
+//! 设置相关 Tauri commands（ticket 11：关闭窗口行为；ticket 13：Git 账号；
+//! ticket 18：mvnd settings.xml）。
 //!
 //! 跨 IPC 的值是 `'minimize' | 'quit'` 字符串（[`crate::settings`] 的持久化
 //! 契约）；非法值在写入侧即被拒绝，读取侧永远返回合法值。
+
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
@@ -117,6 +120,104 @@ fn clear_git_account_in(store: &Store) -> Result<GitAccountDto, ApiError> {
     git_account_dto(store)
 }
 
+// ---------------------------------------------------------------------------
+// mvnd settings.xml (ticket 18)：私服依赖的全局 settings.xml
+// ---------------------------------------------------------------------------
+
+/// mvnd settings.xml 出参：内容是配置而非机密，可以明文回传前端做编辑回填；
+/// `file_exists` 指示 `<appdata>/mvnd-settings.xml` 是否已物化（构建据此追
+/// 加 `-s`）。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MvndSettingsXmlDto {
+    pub content: Option<String>,
+    pub file_exists: bool,
+}
+
+/// mvnd settings.xml 的磁盘物化路径（构建 spawn 侧按同名约定拼接）。
+pub fn settings_xml_path(appdata: &Path) -> PathBuf {
+    appdata.join("mvnd-settings.xml")
+}
+
+/// 读取 mvnd settings.xml 状态（设置页卡片展示与编辑回填）。
+#[tauri::command]
+pub fn get_mvnd_settings_xml(app: AppHandle) -> Result<MvndSettingsXmlDto, ApiError> {
+    let store = app.state::<Store>();
+    mvnd_settings_dto(&store, &app_data_dir(&app)?)
+}
+
+/// 保存 mvnd settings.xml：内容入加密库并物化到 `<appdata>/mvnd-settings.xml`。
+/// 空白内容视为清除（与"清空"按钮同效）。
+#[tauri::command]
+pub fn set_mvnd_settings_xml(
+    app: AppHandle,
+    content: String,
+) -> Result<MvndSettingsXmlDto, ApiError> {
+    let appdata = app_data_dir(&app)?;
+    let store = app.state::<Store>();
+    apply_mvnd_settings(&store, &appdata, Some(&content))
+}
+
+/// 清空 mvnd settings.xml：删加密库记录并移除物化文件（恢复默认，即构建不
+/// 追加 `-s`）。
+#[tauri::command]
+pub fn clear_mvnd_settings_xml(app: AppHandle) -> Result<MvndSettingsXmlDto, ApiError> {
+    let appdata = app_data_dir(&app)?;
+    let store = app.state::<Store>();
+    apply_mvnd_settings(&store, &appdata, None)
+}
+
+fn app_data_dir(app: &AppHandle) -> Result<PathBuf, ApiError> {
+    app.path()
+        .app_data_dir()
+        .map_err(|e| ApiError::raw("io", e.to_string()))
+}
+
+fn mvnd_settings_dto(store: &Store, appdata: &Path) -> Result<MvndSettingsXmlDto, ApiError> {
+    let content = store_settings::get_mvnd_settings_xml(store).map_err(ApiError::from)?;
+    Ok(MvndSettingsXmlDto {
+        content,
+        file_exists: settings_xml_path(appdata).exists(),
+    })
+}
+
+/// 保存/清空的统一入口（`content: None` 或空白 = 清除），保证加密库与磁盘
+/// 文件两处状态同步。
+fn apply_mvnd_settings(
+    store: &Store,
+    appdata: &Path,
+    content: Option<&str>,
+) -> Result<MvndSettingsXmlDto, ApiError> {
+    match content {
+        Some(c) if !c.trim().is_empty() => {
+            store_settings::set_mvnd_settings_xml(store, c).map_err(ApiError::from)?;
+            materialize_settings_xml(appdata, c)?;
+        }
+        _ => {
+            store_settings::clear_mvnd_settings_xml(store).map_err(ApiError::from)?;
+            dematerialize_settings_xml(appdata)?;
+        }
+    }
+    mvnd_settings_dto(store, appdata)
+}
+
+/// 物化：把 settings.xml 内容写到 `<appdata>/mvnd-settings.xml`（构建执行从
+/// 磁盘读取，mvnd 不认加密库）。
+fn materialize_settings_xml(appdata: &Path, content: &str) -> Result<(), ApiError> {
+    std::fs::create_dir_all(appdata)
+        .and_then(|_| std::fs::write(settings_xml_path(appdata), content))
+        .map_err(|e| ApiError::raw("io", e.to_string()))
+}
+
+/// 去物化：删除物化文件；文件本来就不存在不算错误（幂等清空）。
+fn dematerialize_settings_xml(appdata: &Path) -> Result<(), ApiError> {
+    match std::fs::remove_file(settings_xml_path(appdata)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(ApiError::raw("io", e.to_string())),
+    }
+}
+
 #[cfg(test)]
 mod git_account_tests {
     use super::*;
@@ -205,5 +306,90 @@ mod git_account_tests {
         assert!(!dto.has_token);
         assert_eq!(store_settings::get_git_username(&store).unwrap(), None);
         assert_eq!(store_settings::get_git_token(&store).unwrap(), None);
+    }
+}
+
+#[cfg(test)]
+mod mvnd_settings_tests {
+    use super::*;
+
+    const TEST_KEY_HEX: &str =
+        "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
+
+    fn open(dir: &std::path::Path) -> crate::store::Store {
+        crate::store::Store::open(&dir.join("test.db"), TEST_KEY_HEX).unwrap()
+    }
+
+    fn xml(appdata: &std::path::Path) -> String {
+        std::fs::read_to_string(settings_xml_path(appdata)).unwrap()
+    }
+
+    #[test]
+    fn 保存写入加密库并物化到磁盘文件() {
+        let dir = tempfile::tempdir().unwrap();
+        let appdata = dir.path().join("appdata");
+        let store = open(dir.path());
+
+        let dto = apply_mvnd_settings(&store, &appdata, Some("<settings/>")).unwrap();
+
+        assert_eq!(dto.content.as_deref(), Some("<settings/>"));
+        assert!(dto.file_exists);
+        assert_eq!(xml(&appdata), "<settings/>");
+        assert_eq!(
+            store_settings::get_mvnd_settings_xml(&store).unwrap().as_deref(),
+            Some("<settings/>")
+        );
+    }
+
+    #[test]
+    fn 清空同时删除加密库记录与磁盘文件() {
+        let dir = tempfile::tempdir().unwrap();
+        let appdata = dir.path().join("appdata");
+        let store = open(dir.path());
+        apply_mvnd_settings(&store, &appdata, Some("<settings/>")).unwrap();
+
+        let dto = apply_mvnd_settings(&store, &appdata, None).unwrap();
+
+        assert_eq!(dto.content, None);
+        assert!(!dto.file_exists);
+        assert!(!settings_xml_path(&appdata).exists());
+        assert_eq!(store_settings::get_mvnd_settings_xml(&store).unwrap(), None);
+    }
+
+    #[test]
+    fn 空白内容保存等同于清空() {
+        let dir = tempfile::tempdir().unwrap();
+        let appdata = dir.path().join("appdata");
+        let store = open(dir.path());
+        apply_mvnd_settings(&store, &appdata, Some("<settings/>")).unwrap();
+
+        let dto = apply_mvnd_settings(&store, &appdata, Some("   \n  ")).unwrap();
+
+        assert_eq!(dto.content, None);
+        assert!(!dto.file_exists);
+    }
+
+    #[test]
+    fn 未设置过时清空幂等不报错() {
+        let dir = tempfile::tempdir().unwrap();
+        let appdata = dir.path().join("appdata");
+        let store = open(dir.path());
+
+        let dto = apply_mvnd_settings(&store, &appdata, None).unwrap();
+
+        assert_eq!(dto.content, None);
+        assert!(!dto.file_exists);
+    }
+
+    #[test]
+    fn 覆盖保存更新磁盘文件内容() {
+        let dir = tempfile::tempdir().unwrap();
+        let appdata = dir.path().join("appdata");
+        let store = open(dir.path());
+        apply_mvnd_settings(&store, &appdata, Some("<settings>v1</settings>")).unwrap();
+
+        apply_mvnd_settings(&store, &appdata, Some("<settings>v2</settings>")).unwrap();
+
+        assert_eq!(xml(&appdata), "<settings>v2</settings>");
     }
 }

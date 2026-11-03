@@ -6,6 +6,8 @@
 //!   托管 mvnd 可执行文件后才启动。
 //! - **依赖仓库隔离**：[`build_spawn_spec`] 统一追加
 //!   `-Dmaven.repo.local=<appdata>/m2-repo`（用户命令已显式给出时不重复）。
+//! - **私服依赖**（ticket 18）：`<appdata>/mvnd-settings.xml` 存在且用户命令
+//!   未手写 `-s`/`--settings` 时，追加 `-s <appdata>/mvnd-settings.xml`。
 //!
 //! 另外，macOS 图形启动（Finder）的 PATH 极短（研究笔记
 //! tauri2-commands-state.md）：spawn 时显式注入 JAVA_HOME，并把托管 JDK 的
@@ -106,15 +108,32 @@ pub fn validate_build_command(line: &str) -> Result<(), BuildError> {
 
 const REPO_LOCAL_FLAG: &str = "-Dmaven.repo.local";
 
-/// 由构建命令、依赖仓库目录与托管工具链构造启动规格。
+const SETTINGS_SHORT_FLAG: &str = "-s";
+const SETTINGS_LONG_FLAG: &str = "--settings";
+
+/// 用户命令是否已自带 settings 覆盖：`-s` / `--settings` 两个词，或带值的
+/// 附着写法（`-s=…` / `--settings=…`）。自带时不追加 `-s`（ticket 18）。
+fn has_settings_token(args: &[String]) -> bool {
+    args.iter().any(|a| {
+        a == SETTINGS_SHORT_FLAG
+            || a == SETTINGS_LONG_FLAG
+            || a.starts_with("--settings=")
+            || a.starts_with("-s=")
+    })
+}
+
+/// 由构建命令、依赖仓库目录、可选的 settings.xml 路径与托管工具链构造启动规格。
 ///
 /// - 第一个词 `mvnd` / `mvn` → 替换为托管 mvnd 可执行文件；
 /// - 其余词原样作为参数；
 /// - 未显式给出 `-Dmaven.repo.local=…` 时统一追加（ADR-0001）；
+/// - `settings_xml` 为 `Some`（`<appdata>/mvnd-settings.xml` 已物化）且用户
+///   命令未手写 `-s`/`--settings` 时，追加 `-s <path>`（ticket 18）；
 /// - 显式注入 JAVA_HOME 与前置 PATH（Finder PATH 坑）。
 pub fn build_spawn_spec(
     line: &str,
     repo_local: &Path,
+    settings_xml: Option<&Path>,
     tc: &ToolchainPaths,
 ) -> Result<SpawnSpec, BuildError> {
     let tokens = split_command(line)?;
@@ -126,6 +145,12 @@ pub fn build_spawn_spec(
     let mut args: Vec<String> = tokens[1..].to_vec();
     if !args.iter().any(|a| a.starts_with(REPO_LOCAL_FLAG)) {
         args.push(format!("{}={}", REPO_LOCAL_FLAG, repo_local.display()));
+    }
+    if let Some(settings) = settings_xml {
+        if !has_settings_token(&args) {
+            args.push(SETTINGS_SHORT_FLAG.to_string());
+            args.push(settings.to_string_lossy().into_owned());
+        }
     }
 
     let jdk_bin = tc.java_home.join("bin").to_string_lossy().into_owned();

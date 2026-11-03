@@ -5,6 +5,8 @@
 //! 关闭窗口行为、Git 账号（ticket 13：用户名 + 密码/访问令牌，入加密库
 //! ADR-0002 —— `app_meta` 迁移 v1 起即提供加密 KV 存储，因此无需新迁移）。
 //! Git 令牌从不回传前端明文（掩码模式：编辑留空=保持不变，见命令层）。
+//! mvnd settings.xml（ticket 18）内容同样入加密库，由命令层物化为
+//! `<appdata>/mvnd-settings.xml`（构建 spawn 从磁盘读取）。
 
 use rusqlite::OptionalExtension;
 
@@ -99,6 +101,33 @@ pub fn set_git_token(store: &Store, token: &str) -> Result<(), StoreError> {
 pub fn clear_git_account(store: &Store) -> Result<(), StoreError> {
     remove(store, GIT_USERNAME_KEY)?;
     remove(store, GIT_TOKEN_KEY)
+}
+
+// ---------------------------------------------------------------------------
+// mvnd settings.xml (ticket 18)
+// ---------------------------------------------------------------------------
+
+/// mvnd 自定义 settings.xml 内容（私服依赖）。入加密库（ADR-0002），命令层
+/// 在保存/清除时把它物化到 `<appdata>/mvnd-settings.xml`（构建 spawn 从磁盘
+/// 读取）。
+pub const MVND_SETTINGS_XML_KEY: &str = "mvnd_settings_xml";
+
+/// 读取 mvnd settings.xml 内容；未设置为 `None`。
+pub fn get_mvnd_settings_xml(store: &Store) -> Result<Option<String>, StoreError> {
+    get(store, MVND_SETTINGS_XML_KEY)
+}
+
+/// 写入 mvnd settings.xml 内容（原样存储；空白即视为清除）。
+pub fn set_mvnd_settings_xml(store: &Store, content: &str) -> Result<(), StoreError> {
+    if content.trim().is_empty() {
+        return remove(store, MVND_SETTINGS_XML_KEY);
+    }
+    set(store, MVND_SETTINGS_XML_KEY, content)
+}
+
+/// 清除 mvnd settings.xml 内容。
+pub fn clear_mvnd_settings_xml(store: &Store) -> Result<(), StoreError> {
+    remove(store, MVND_SETTINGS_XML_KEY)
 }
 
 fn remove(store: &Store, key: &str) -> Result<(), StoreError> {

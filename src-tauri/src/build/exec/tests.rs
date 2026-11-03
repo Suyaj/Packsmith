@@ -85,7 +85,7 @@ fn 默认命令映射到托管mvnd并追加依赖仓库参数() {
     let (_dir, tc) = fake_toolchain("spec-default");
     let repo = PathBuf::from("/appdata/m2-repo");
 
-    let spec = build_spawn_spec("mvnd package -DskipTests", &repo, &tc).unwrap();
+    let spec = build_spawn_spec("mvnd package -DskipTests", &repo, None, &tc).unwrap();
 
     assert_eq!(spec.program, tc.mvnd);
     assert_eq!(
@@ -106,6 +106,7 @@ fn 用户命令已含maven_repo_local时不重复追加() {
     let spec = build_spawn_spec(
         "mvnd package -Dmaven.repo.local=/appdata/m2-repo",
         &repo,
+        None,
         &tc,
     )
     .unwrap();
@@ -123,7 +124,7 @@ fn 启动规格注入JAVA_HOME并把托管bin前置到PATH() {
     let (_dir, tc) = fake_toolchain("spec-env");
     let repo = PathBuf::from("/appdata/m2-repo");
 
-    let spec = build_spawn_spec("mvnd package", &repo, &tc).unwrap();
+    let spec = build_spawn_spec("mvnd package", &repo, None, &tc).unwrap();
 
     let env: Vec<(String, String)> = spec.env.clone();
     let java_home = &env.iter().find(|(k, _)| k == "JAVA_HOME").unwrap().1;
@@ -142,6 +143,95 @@ fn 启动规格注入JAVA_HOME并把托管bin前置到PATH() {
 fn 首词非mvnd的执行命令被拒绝() {
     let (_dir, tc) = fake_toolchain("spec-reject");
     let repo = PathBuf::from("/appdata/m2-repo");
-    let err = build_spawn_spec("gradle assemble", &repo, &tc).unwrap_err();
+    let err = build_spawn_spec("gradle assemble", &repo, None, &tc).unwrap_err();
     assert!(matches!(err, BuildError::UnsupportedBuildCommand(other) if other == "gradle"));
+}
+
+// ---------------------------------------------------------------------------
+// build_spawn_spec：mvnd settings.xml 注入（ticket 18）
+// ---------------------------------------------------------------------------
+
+#[test]
+fn settings_xml存在时追加_s参数_顺序在依赖仓库参数之后() {
+    let (_dir, tc) = fake_toolchain("spec-settings-present");
+    let repo = PathBuf::from("/appdata/m2-repo");
+    let settings = PathBuf::from("/appdata/mvnd-settings.xml");
+
+    let spec =
+        build_spawn_spec("mvnd package -DskipTests", &repo, Some(&settings), &tc).unwrap();
+
+    assert_eq!(
+        spec.args,
+        vec![
+            "package",
+            "-DskipTests",
+            "-Dmaven.repo.local=/appdata/m2-repo",
+            "-s",
+            "/appdata/mvnd-settings.xml",
+        ]
+    );
+}
+
+#[test]
+fn settings_xml缺失时不改变参数() {
+    let (_dir, tc) = fake_toolchain("spec-settings-absent");
+    let repo = PathBuf::from("/appdata/m2-repo");
+
+    let spec = build_spawn_spec("mvnd package", &repo, None, &tc).unwrap();
+
+    assert_eq!(
+        spec.args,
+        vec!["package", "-Dmaven.repo.local=/appdata/m2-repo"],
+        "未设置 settings.xml 时不得追加 -s"
+    );
+}
+
+#[test]
+fn 用户命令已含_s_短参数时不重复追加() {
+    let (_dir, tc) = fake_toolchain("spec-settings-short");
+    let repo = PathBuf::from("/appdata/m2-repo");
+    let settings = PathBuf::from("/appdata/mvnd-settings.xml");
+
+    let spec = build_spawn_spec(
+        "mvnd package -s /my/own/settings.xml",
+        &repo,
+        Some(&settings),
+        &tc,
+    )
+    .unwrap();
+
+    let count = spec.args.iter().filter(|a| a.as_str() == "-s").count();
+    assert_eq!(count, 1, "用户已手写 -s 时不得重复追加");
+    assert!(spec.args.contains(&"/my/own/settings.xml".to_string()));
+    assert!(!spec.args.contains(&"/appdata/mvnd-settings.xml".to_string()));
+}
+
+#[test]
+fn 用户命令已含_settings_长参数时不重复追加() {
+    let (_dir, tc) = fake_toolchain("spec-settings-long");
+    let repo = PathBuf::from("/appdata/m2-repo");
+    let settings = PathBuf::from("/appdata/mvnd-settings.xml");
+
+    let spec = build_spawn_spec(
+        "mvnd package --settings /my/own/settings.xml",
+        &repo,
+        Some(&settings),
+        &tc,
+    )
+    .unwrap();
+
+    assert!(!spec.args.contains(&"/appdata/mvnd-settings.xml".to_string()));
+    assert!(spec.args.contains(&"--settings".to_string()));
+}
+
+#[test]
+fn 附着写法的_s参数也被识别为已显式给出() {
+    let (_dir, tc) = fake_toolchain("spec-settings-attached");
+    let repo = PathBuf::from("/appdata/m2-repo");
+    let settings = PathBuf::from("/appdata/mvnd-settings.xml");
+
+    let spec = build_spawn_spec("mvnd package -s=/my/settings.xml", &repo, Some(&settings), &tc)
+        .unwrap();
+
+    assert!(!spec.args.contains(&"/appdata/mvnd-settings.xml".to_string()));
 }
