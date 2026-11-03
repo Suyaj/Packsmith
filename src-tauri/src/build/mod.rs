@@ -21,6 +21,7 @@ use crate::store::Store;
 
 pub use crate::store::projects::CloneStage;
 
+pub mod artifacts;
 pub mod commands;
 pub mod exec;
 
