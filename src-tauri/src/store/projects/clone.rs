@@ -5,8 +5,9 @@
 //! `tauri::ipc::Channel`）；取消经共享的 `AtomicBool`（命令层存入任务注册表，
 //! 由 `cancel_clone` 命令置位）。取消后不残留目录、不写库。
 //!
-//! v1 不做凭据支持：仅匿名访问公开仓库（spec: 明确不做私库凭据，此处为
-//! 有意取舍，非遗留缺口）。
+//! 认证 (ticket 13)：调用方传入加密库中配置的 Git 账号（HTTPS 用户名/令牌，
+//! 见 [`crate::git_auth`]）；未配置时匿名访问公开仓库。SSH 协议 URL 明确
+//! 拒绝（v1.1 仅 HTTPS 认证）。
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -83,13 +84,22 @@ fn home_dir() -> Option<PathBuf> {
 /// clone，ticket 06）；`None` 用远端默认分支。取消标志在传输回调中轮询，
 /// 置位后中止并返回 [`ProjectError::Cancelled`]（调用方负责清理半成品目录）。
 /// 不存在的分支名会返回 [`ProjectError::Clone`]（libgit2 报 reference not found）。
+///
+/// 认证 (ticket 13)：`creds` 为已配置的 Git 账号（HTTPS 用户名/令牌）时，
+/// 远程要求认证即供给 `Cred::userpass_plaintext`；`None` 保持匿名（公开
+/// 仓库不受影响）。SSH 协议 URL 一律 [`ProjectError::SshNotSupported`]；
+/// Auth 类失败映射为 [`ProjectError::GitAuth`]（引导去 设置 → Git 账号）。
 pub fn clone_repo(
     url: &str,
     dest: &Path,
     branch: Option<&str>,
     on_progress: &mut dyn FnMut(CloneProgress),
     cancel: &CancelFlag,
+    creds: Option<&crate::git_auth::GitCredentials>,
 ) -> Result<(), ProjectError> {
+    if crate::git_auth::is_ssh_url(url) {
+        return Err(ProjectError::SshNotSupported(url.to_string()));
+    }
     if super::is_cancelled(cancel) {
         return Err(ProjectError::Cancelled);
     }
@@ -99,6 +109,14 @@ pub fn clone_repo(
     let cancel = Rc::new(cancel.clone());
 
     let mut remote_callbacks = RemoteCallbacks::new();
+    if let Some(creds) = creds {
+        let attempt = crate::git_auth::AuthAttempt::new();
+        let creds = creds.clone();
+        // 凭据被拒时 libgit2 会再次回调；AuthAttempt 第二次起报错中止。
+        remote_callbacks.credentials(move |url, username, allowed| {
+            attempt.try_credential(&creds, Some(url), username, allowed)
+        });
+    }
     {
         let reporter = Rc::clone(&reporter);
         let cancel = Rc::clone(&cancel);
@@ -143,7 +161,7 @@ pub fn clone_repo(
         if cancel.load(Ordering::Relaxed) {
             return Err(ProjectError::Cancelled);
         }
-        return Err(ProjectError::Clone(e.message().to_string()));
+        return Err(super::map_git_error(e));
     }
     on_progress_in(&reporter, CloneProgress::stage(CloneStage::CheckingOut));
     on_progress_in(&reporter, CloneProgress::stage(CloneStage::Done));
@@ -184,7 +202,9 @@ pub fn clone_and_register(
         std::fs::create_dir_all(parent)?;
     }
 
-    if let Err(e) = clone_repo(url, &dest, None, on_progress, cancel) {
+    // 凭据查找错误不得让 clone 崩溃：credentials_from_store 失败按匿名处理。
+    let creds = crate::git_auth::credentials_from_store(store);
+    if let Err(e) = clone_repo(url, &dest, None, on_progress, cancel, creds.as_ref()) {
         // 半成品目录不残留（验收：clone 失败无残留）。
         let _ = std::fs::remove_dir_all(&dest);
         return Err(e);

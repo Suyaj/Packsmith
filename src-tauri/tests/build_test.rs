@@ -82,7 +82,7 @@ fn list_branches_returns_live_remote_branch_names_without_heads_or_tags() {
     let dir = tempfile::tempdir().unwrap();
     let fixture = fixture_repo(dir.path(), "upstream");
 
-    let mut branches = packsmith_lib::build::list_branches(fixture.to_str().unwrap()).unwrap();
+    let mut branches = packsmith_lib::build::list_branches(fixture.to_str().unwrap(), None).unwrap();
     branches.sort();
 
     assert_eq!(
@@ -98,7 +98,7 @@ fn list_branches_sees_branches_added_after_the_fixture_was_created() {
     let dir = tempfile::tempdir().unwrap();
     let fixture = fixture_repo(dir.path(), "upstream");
     assert!(
-        packsmith_lib::build::list_branches(fixture.to_str().unwrap())
+        packsmith_lib::build::list_branches(fixture.to_str().unwrap(), None)
             .unwrap()
             .is_sorted()
     );
@@ -112,7 +112,7 @@ fn list_branches_sees_branches_added_after_the_fixture_was_created() {
         .unwrap();
     repo.branch("release/2.0", &head, false).unwrap();
 
-    let mut branches = packsmith_lib::build::list_branches(fixture.to_str().unwrap()).unwrap();
+    let mut branches = packsmith_lib::build::list_branches(fixture.to_str().unwrap(), None).unwrap();
     branches.sort();
     assert!(branches.contains(&"release/2.0".to_string()));
 }
@@ -122,7 +122,7 @@ fn list_branches_fails_clearly_for_an_unreachable_source() {
     let dir = tempfile::tempdir().unwrap();
     let bogus = dir.path().join("no-such-repo.git");
 
-    let err = packsmith_lib::build::list_branches(bogus.to_str().unwrap()).unwrap_err();
+    let err = packsmith_lib::build::list_branches(bogus.to_str().unwrap(), None).unwrap_err();
     assert!(
         matches!(err, ProjectError::BranchListing(_)),
         "an unreachable source must surface as BranchListing, got {err:?}"
@@ -318,4 +318,39 @@ fn prepare_workspace_rejects_an_unknown_project() {
     )
     .unwrap_err();
     assert!(matches!(err, ProjectError::ProjectNotFound(4242)));
+}
+
+// ---------------------------------------------------------------------------
+// Git 账号与认证 (ticket 13)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn list_branches_rejects_ssh_urls_upfront() {
+    for url in [
+        "git@github.com:foo/bar.git",
+        "ssh://git@github.com/foo/bar.git",
+    ] {
+        let err = packsmith_lib::build::list_branches(url, None).unwrap_err();
+        assert!(
+            matches!(err, ProjectError::SshNotSupported(_)),
+            "url: {url}, got {err:?}"
+        );
+        assert_eq!(err.code(), "ssh_not_supported");
+    }
+}
+
+#[test]
+fn list_branches_with_configured_credentials_still_works_for_local_fixture() {
+    // git2 本地传输忽略凭据：验证配置了凭据时分支拉取链路照常工作。
+    let dir = tempfile::tempdir().unwrap();
+    let fixture = fixture_repo(dir.path(), "auth-upstream");
+    let store = open_store(dir.path());
+    packsmith_lib::store::settings::set_git_username(&store, "octocat").unwrap();
+    packsmith_lib::store::settings::set_git_token(&store, "ghp_x").unwrap();
+    let creds = packsmith_lib::git_auth::credentials_from_store(&store);
+
+    let mut branches =
+        packsmith_lib::build::list_branches(fixture.to_str().unwrap(), creds.as_ref()).unwrap();
+    branches.sort();
+    assert_eq!(branches, vec!["feature/search".to_string(), "main".to_string()]);
 }

@@ -142,6 +142,7 @@ describe("设置页：托管工具链", () => {
     mockInvoke.mockImplementation(async (cmd: string) => {
       if (cmd === "toolchain_status") return fixtureStatuses;
       if (cmd === "get_close_window_behavior") return "minimize";
+      if (cmd === "get_git_account") return { username: null, hasToken: false };
       throw new Error("网络下载失败：连接超时");
     });
     render(<SettingsPage />);
@@ -215,11 +216,12 @@ describe("设置页：构件库保留策略", () => {
     render(<SettingsPage />);
 
     const input = await screen.findByLabelText("保留次数");
+    const card = input.closest('[data-slot="card"]') as HTMLElement;
     await userEvent.clear(input);
     await userEvent.type(input, "3");
-    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    await userEvent.click(within(card).getByRole("button", { name: "保存" }));
 
-    expect(await screen.findByText("已保存")).toBeInTheDocument();
+    expect(await within(card).findByText("已保存")).toBeInTheDocument();
     expect(mockInvoke).toHaveBeenCalledWith("set_build_retention", { retention: 3 });
   });
 
@@ -231,9 +233,10 @@ describe("设置页：构件库保留策略", () => {
     render(<SettingsPage />);
 
     const input = await screen.findByLabelText("保留次数");
+    const card = input.closest('[data-slot="card"]') as HTMLElement;
     await userEvent.clear(input);
     await userEvent.type(input, "0");
-    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    await userEvent.click(within(card).getByRole("button", { name: "保存" }));
 
     expect(await screen.findByText(/不小于 1/)).toBeInTheDocument();
     expect(mockInvoke).not.toHaveBeenCalledWith(
@@ -326,5 +329,164 @@ describe("设置页：关闭窗口行为", () => {
     expect(
       within(section).getByRole("radio", { name: "最小化到托盘" }),
     ).toBeChecked();
+  });
+});
+
+describe("设置页：Git 账号（票 13）", () => {
+  function mockAccount(account?: { username: string | null; hasToken: boolean }) {
+    mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
+      switch (cmd) {
+        case "toolchain_status":
+          return fixtureStatuses;
+        case "get_git_account":
+          return account ?? { username: null, hasToken: false };
+        case "set_git_account": {
+          const a = args as { username: string; token?: string };
+          return {
+            username: a.username,
+            hasToken: a.token !== undefined || Boolean(account?.hasToken),
+          };
+        }
+        case "clear_git_account":
+          return { username: null, hasToken: false };
+        default:
+          throw new Error(`unexpected command ${cmd}`);
+      }
+    });
+  }
+
+  it("未配置时显示未设置指示", async () => {
+    mockAccount({ username: null, hasToken: false });
+    render(<SettingsPage />);
+
+    const card = screen
+      .getByText("Git 账号")
+      .closest('[data-slot="card"]') as HTMLElement;
+    await within(card).findByText("未设置");
+  });
+
+  it("保存用户名与令牌：明文令牌走 set_git_account，保存后显示已设置", async () => {
+    const user = userEvent.setup();
+    mockAccount({ username: null, hasToken: false });
+    render(<SettingsPage />);
+
+    const card = screen
+      .getByText("Git 账号")
+      .closest('[data-slot="card"]') as HTMLElement;
+    await within(card).findByText("未设置");
+
+    await user.type(within(card).getByLabelText("用户名"), "octocat");
+    await user.type(within(card).getByLabelText("密码 / 访问令牌"), "ghp_abc");
+    await user.click(within(card).getByRole("button", { name: "保存" }));
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("set_git_account", {
+        username: "octocat",
+        token: "ghp_abc",
+      });
+    });
+    expect(await within(card).findByText("已设置")).toBeInTheDocument();
+    // 保存成功后清空令牌输入框，明文不留在 DOM。
+    expect(within(card).getByLabelText("密码 / 访问令牌")).toHaveValue("");
+  });
+
+  it("令牌输入框为密码型（不明文回显）", async () => {
+    mockAccount({ username: null, hasToken: false });
+    render(<SettingsPage />);
+
+    const card = screen
+      .getByText("Git 账号")
+      .closest('[data-slot="card"]') as HTMLElement;
+    await within(card).findByText("未设置");
+    expect(within(card).getByLabelText("密码 / 访问令牌")).toHaveAttribute(
+      "type",
+      "password",
+    );
+  });
+
+  it("编辑时令牌留空 = 保持不变（不传 token 字段）", async () => {
+    const user = userEvent.setup();
+    mockAccount({ username: "octocat", hasToken: true });
+    render(<SettingsPage />);
+
+    const card = screen
+      .getByText("Git 账号")
+      .closest('[data-slot="card"]') as HTMLElement;
+    await within(card).findByText("已设置");
+
+    await user.clear(within(card).getByLabelText("用户名"));
+    await user.type(within(card).getByLabelText("用户名"), "renamed");
+    await user.click(within(card).getByRole("button", { name: "保存" }));
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("set_git_account", {
+        username: "renamed",
+      });
+    });
+  });
+
+  it("编辑时回填用户名但不回填令牌（令牌不明文回传）", async () => {
+    mockAccount({ username: "octocat", hasToken: true });
+    render(<SettingsPage />);
+
+    const card = screen
+      .getByText("Git 账号")
+      .closest('[data-slot="card"]') as HTMLElement;
+    await within(card).findByText("已设置");
+    expect(within(card).getByLabelText("用户名")).toHaveValue("octocat");
+    expect(within(card).getByLabelText("密码 / 访问令牌")).toHaveValue("");
+  });
+
+  it("清除账号：调用 clear_git_account，恢复未设置", async () => {
+    const user = userEvent.setup();
+    mockAccount({ username: "octocat", hasToken: true });
+    render(<SettingsPage />);
+
+    const card = screen
+      .getByText("Git 账号")
+      .closest('[data-slot="card"]') as HTMLElement;
+    await within(card).findByText("已设置");
+
+    await user.click(within(card).getByRole("button", { name: "清除账号" }));
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("clear_git_account");
+    });
+    expect(await within(card).findByText("未设置")).toBeInTheDocument();
+  });
+
+  it("未配置时不显示清除按钮", async () => {
+    mockAccount({ username: null, hasToken: false });
+    render(<SettingsPage />);
+
+    const card = screen
+      .getByText("Git 账号")
+      .closest('[data-slot="card"]') as HTMLElement;
+    await within(card).findByText("未设置");
+    expect(
+      within(card).queryByRole("button", { name: "清除账号" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("保存失败：显示错误且不清空输入", async () => {
+    const user = userEvent.setup();
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "toolchain_status") return fixtureStatuses;
+      if (cmd === "get_git_account") return { username: null, hasToken: false };
+      if (cmd === "set_git_account")
+        throw { code: "git_username_required", message: "Git 用户名不能为空" };
+      throw new Error(`unexpected command ${cmd}`);
+    });
+    render(<SettingsPage />);
+
+    const card = screen
+      .getByText("Git 账号")
+      .closest('[data-slot="card"]') as HTMLElement;
+    await within(card).findByText("未设置");
+
+    await user.type(within(card).getByLabelText("用户名"), "   ");
+    await user.click(within(card).getByRole("button", { name: "保存" }));
+
+    expect(await within(card).findByText(/用户名不能为空/)).toBeInTheDocument();
   });
 });

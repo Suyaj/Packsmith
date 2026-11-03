@@ -146,6 +146,12 @@ pub enum ProjectError {
     /// 实时拉取分支列表失败（`git ls-remote` 等价操作；URL 不可达 / 不是 git 仓库等）。
     #[error("failed to list remote branches: {0}")]
     BranchListing(String),
+    /// Git 认证失败（ticket 13）：凭据被拒，或私有仓库未配置凭据。
+    #[error("git authentication failed: {0}")]
+    GitAuth(String),
+    /// SSH 协议 URL（v1.1 仅支持 HTTPS 认证，明确拒绝）。
+    #[error("SSH protocol URLs are not supported: {0}")]
+    SshNotSupported(String),
     /// 指定 id 的项目不存在。
     #[error("project {0} not found")]
     ProjectNotFound(i64),
@@ -173,11 +179,25 @@ impl ProjectError {
             ProjectError::Cancelled => "cancelled",
             ProjectError::Clone(_) => "clone_failed",
             ProjectError::BranchListing(_) => "branch_listing_failed",
+            ProjectError::GitAuth(_) => "git_auth_failed",
+            ProjectError::SshNotSupported(_) => "ssh_not_supported",
             ProjectError::ProjectNotFound(_) => "project_not_found",
             ProjectError::InvalidBuildCommand(_) => "invalid_build_command",
             ProjectError::Store(_) => "store",
             ProjectError::Io(_) => "io",
         }
+    }
+}
+
+/// 把 git2 操作错误映射为 [`ProjectError`]：Auth 类错误（凭据被拒 / 私有
+/// 仓库未配置凭据，401 等）映射为 [`ProjectError::GitAuth`]——前端按
+/// `git_auth_failed` 给出"去 设置 → Git 账号 检查"的中文提示；其余保持
+/// 原有通用错误。clone 与分支拉取共用（ticket 13）。
+pub fn map_git_error(e: git2::Error) -> ProjectError {
+    if e.code() == git2::ErrorCode::Auth {
+        ProjectError::GitAuth(e.message().to_string())
+    } else {
+        ProjectError::Clone(e.message().to_string())
     }
 }
 

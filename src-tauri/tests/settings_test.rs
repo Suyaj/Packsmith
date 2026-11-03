@@ -149,3 +149,118 @@ fn close_action_follows_the_setting() {
         "选退出则真退出"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Git 账号 (ticket 13): 用户名 + 密码/访问令牌，入加密库
+// ---------------------------------------------------------------------------
+
+use packsmith_lib::store::settings::{
+    clear_git_account, get_git_token, get_git_username, set_git_token, set_git_username,
+};
+
+#[test]
+fn unset_git_account_reads_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open(&dir.path().join("test.db"));
+
+    assert_eq!(get_git_username(&store).unwrap(), None);
+    assert_eq!(get_git_token(&store).unwrap(), None);
+}
+
+#[test]
+fn git_account_round_trips_username_and_token() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open(&dir.path().join("test.db"));
+
+    set_git_username(&store, "octocat").unwrap();
+    set_git_token(&store, "ghp_secret-token-123").unwrap();
+
+    assert_eq!(get_git_username(&store).unwrap().as_deref(), Some("octocat"));
+    assert_eq!(
+        get_git_token(&store).unwrap().as_deref(),
+        Some("ghp_secret-token-123")
+    );
+}
+
+#[test]
+fn git_account_persists_across_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("test.db");
+
+    {
+        let store = open(&db);
+        set_git_username(&store, "octocat").unwrap();
+        set_git_token(&store, "token-1").unwrap();
+    }
+    let store = open(&db);
+    assert_eq!(get_git_username(&store).unwrap().as_deref(), Some("octocat"));
+    assert_eq!(get_git_token(&store).unwrap().as_deref(), Some("token-1"));
+}
+
+#[test]
+fn set_git_username_trims_whitespace() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open(&dir.path().join("test.db"));
+
+    set_git_username(&store, "  octocat  ").unwrap();
+    assert_eq!(get_git_username(&store).unwrap().as_deref(), Some("octocat"));
+}
+
+#[test]
+fn clear_git_account_removes_username_and_token() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open(&dir.path().join("test.db"));
+
+    set_git_username(&store, "octocat").unwrap();
+    set_git_token(&store, "token-1").unwrap();
+
+    clear_git_account(&store).unwrap();
+
+    assert_eq!(get_git_username(&store).unwrap(), None);
+    assert_eq!(get_git_token(&store).unwrap(), None);
+}
+
+#[test]
+fn clear_git_account_is_idempotent_when_nothing_is_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open(&dir.path().join("test.db"));
+
+    clear_git_account(&store).unwrap();
+    assert_eq!(get_git_username(&store).unwrap(), None);
+}
+
+use packsmith_lib::git_auth::credentials_from_store;
+
+#[test]
+fn credentials_from_store_requires_both_username_and_token() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open(&dir.path().join("test.db"));
+
+    // 只配用户名：不构成可用凭据。
+    set_git_username(&store, "octocat").unwrap();
+    assert_eq!(credentials_from_store(&store), None);
+
+    set_git_token(&store, "ghp_x").unwrap();
+    let creds = credentials_from_store(&store).expect("both set -> Some");
+    assert_eq!(creds.username, "octocat");
+    assert_eq!(creds.token, "ghp_x");
+}
+
+#[test]
+fn credentials_from_store_is_none_when_unset() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open(&dir.path().join("test.db"));
+    assert_eq!(credentials_from_store(&store), None);
+}
+
+#[test]
+fn clear_git_account_also_clears_credentials_from_store() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open(&dir.path().join("test.db"));
+    set_git_username(&store, "octocat").unwrap();
+    set_git_token(&store, "ghp_x").unwrap();
+
+    clear_git_account(&store).unwrap();
+
+    assert_eq!(credentials_from_store(&store), None);
+}

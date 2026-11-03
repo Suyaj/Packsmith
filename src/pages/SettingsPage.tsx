@@ -23,6 +23,12 @@ import {
   normalizeCloseWindowBehavior,
   saveCloseWindowBehavior,
 } from "@/lib/settings";
+import {
+  clearGitAccount,
+  fetchGitAccount,
+  saveGitAccount,
+  type GitAccount,
+} from "@/lib/gitAccountApi";
 
 const TOOL_ORDER: ToolKind[] = ["git", "jdk", "mvnd"];
 
@@ -317,6 +323,160 @@ function CloseBehaviorCard() {
   );
 }
 
+/**
+ * Git 账号（票 13）：clone / 分支拉取的 HTTPS 认证凭据，入加密库。
+ * 掩码模式：用户名可展示，令牌只给"已设置"指示、明文永不过 IPC 回传；
+ * 编辑令牌留空 = 保持不变，显式"清除账号"一起删用户名与令牌。
+ */
+function GitAccountCard() {
+  const { t } = useTranslation();
+  const [account, setAccount] = useState<GitAccount | null>(null);
+  const [username, setUsername] = useState("");
+  const [token, setToken] = useState("");
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    fetchGitAccount()
+      .then((a) => {
+        if (disposed) return;
+        setAccount(a);
+        setUsername(a.username ?? "");
+      })
+      .catch((e) => {
+        if (!disposed) setError(String(e));
+      });
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
+  const configured = account !== null && account.hasToken;
+
+  async function handleSave() {
+    setError(null);
+    setSaved(false);
+    if (username.trim() === "") {
+      setError(t("settings.gitAccount.usernameRequired"));
+      return;
+    }
+    try {
+      // 令牌留空 = 保持不变（不传 token 字段，后端不覆盖）。
+      const updated = await saveGitAccount(
+        username,
+        token === "" ? undefined : token,
+      );
+      setAccount(updated);
+      setToken("");
+      setSaved(true);
+    } catch (e) {
+      setError(extractErrorDetail(e) ?? String(e));
+    }
+  }
+
+  async function handleClear() {
+    setError(null);
+    setSaved(false);
+    try {
+      const updated = await clearGitAccount();
+      setAccount(updated);
+      setUsername("");
+      setToken("");
+    } catch (e) {
+      setError(extractErrorDetail(e) ?? String(e));
+    }
+  }
+
+  return (
+    <Card className="mt-4">
+      <CardHeader>
+        <CardTitle>{t("settings.gitAccount.title")}</CardTitle>
+        <CardDescription>{t("settings.gitAccount.description")}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="flex items-center gap-3">
+          {configured ? (
+            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
+              {t("settings.gitAccount.set")}
+            </span>
+          ) : (
+            <span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground">
+              {t("settings.gitAccount.unset")}
+            </span>
+          )}
+        </div>
+        <form
+          className="mt-3 flex flex-col gap-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void handleSave();
+          }}
+        >
+          <label className="flex items-center gap-2 text-sm">
+            {t("settings.gitAccount.username")}
+            <input
+              type="text"
+              aria-label={t("settings.gitAccount.username")}
+              value={username}
+              onChange={(e) => {
+                setUsername(e.target.value);
+                setSaved(false);
+              }}
+              className="w-56 rounded-md border bg-background px-2 py-1.5"
+            />
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            {t("settings.gitAccount.token")}
+            <input
+              type="password"
+              aria-label={t("settings.gitAccount.token")}
+              value={token}
+              placeholder={
+                configured ? t("settings.gitAccount.tokenKeepHint") : undefined
+              }
+              onChange={(e) => {
+                setToken(e.target.value);
+                setSaved(false);
+              }}
+              className="w-56 rounded-md border bg-background px-2 py-1.5"
+            />
+          </label>
+          <div className="flex items-center gap-3">
+            <Button size="sm" variant="outline" type="submit">
+              {t("settings.gitAccount.save")}
+            </Button>
+            {configured && (
+              <Button size="sm" variant="ghost" type="button" onClick={handleClear}>
+                {t("settings.gitAccount.clear")}
+              </Button>
+            )}
+            {saved && (
+              <span role="status" className="text-sm">
+                {t("settings.gitAccount.saved")}
+              </span>
+            )}
+          </div>
+        </form>
+        {error && (
+          <p role="alert" className="mt-2 text-sm text-destructive">
+            {error}
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** 后端 ApiError 是 { code, message } 对象；取 message 作为展示细节。 */
+function extractErrorDetail(e: unknown): string | null {
+  if (typeof e === "object" && e !== null && "message" in e) {
+    const m = (e as { message: unknown }).message;
+    if (typeof m === "string") return m;
+  }
+  return null;
+}
+
 function SettingsPage() {
   const { t } = useTranslation();
   const [rows, setRows] = useState<Rows | null>(null);
@@ -437,6 +597,7 @@ function SettingsPage() {
       </Card>
       <RetentionCard />
       <CloseBehaviorCard />
+      <GitAccountCard />
     </section>
   );
 }

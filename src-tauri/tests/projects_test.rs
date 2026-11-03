@@ -630,3 +630,51 @@ fn gradle_cannot_be_cloned_and_registered() {
     assert!(!dir.path().join("workspace").join("gradle-clone").exists());
     assert!(projects::list(&store).unwrap().is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// Git 账号与认证 (ticket 13)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn clone_repo_rejects_ssh_urls_upfront() {
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("ssh-proj");
+
+    for url in [
+        "git@github.com:foo/bar.git",
+        "ssh://git@github.com/foo/bar.git",
+    ] {
+        let err = projects::clone_repo(url, &dest, None, &mut |_| {}, &new_cancel_flag(), None)
+            .unwrap_err();
+        assert!(matches!(err, ProjectError::SshNotSupported(_)), "url: {url}");
+        assert_eq!(err.code(), "ssh_not_supported");
+        assert!(!dest.exists(), "SSH URL 拒绝时不留半成品目录");
+    }
+}
+
+#[test]
+fn clone_and_register_with_configured_credentials_succeeds_against_local_fixture() {
+    // git2 本地传输忽略凭据（无法密闭模拟真 HTTP 认证），此处验证配置了
+    // 凭据时完整 clone 链路照常工作（凭据查找 → 回调装配 → clone）。
+    let dir = tempfile::tempdir().unwrap();
+    let fixture = fixture_repo(dir.path(), "auth-upstream");
+    let workspace = dir.path().join("workspace");
+    let store = open_store(dir.path());
+    packsmith_lib::store::settings::set_git_username(&store, "octocat").unwrap();
+    packsmith_lib::store::settings::set_git_token(&store, "ghp_x").unwrap();
+
+    let project = projects::clone_and_register(
+        &store,
+        "auth-cloned",
+        fixture.to_str().unwrap(),
+        workspace.to_str().unwrap(),
+        ProjectType::Maven,
+        &new_cancel_flag(),
+        &mut |_| {},
+    )
+    .unwrap();
+
+    assert!(workspace.join("auth-cloned").join("README.md").exists());
+    assert_eq!(project.name, "auth-cloned");
+}
+

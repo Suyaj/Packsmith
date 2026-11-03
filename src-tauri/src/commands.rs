@@ -50,6 +50,11 @@ impl ApiError {
             message: message.into(),
         }
     }
+
+    /// 稳定的机器可读错误码（前端据此选 i18n 文案）。
+    pub fn code(&self) -> &str {
+        &self.code
+    }
 }
 
 #[tauri::command]
