@@ -43,6 +43,12 @@ impl From<ProjectError> for ApiError {
     }
 }
 
+impl From<crate::store::StoreError> for ApiError {
+    fn from(e: crate::store::StoreError) -> Self {
+        ApiError::raw("store", e.to_string())
+    }
+}
+
 impl ApiError {
     pub(crate) fn raw(code: &str, message: impl Into<String>) -> Self {
         ApiError {
