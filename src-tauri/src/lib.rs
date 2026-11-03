@@ -61,6 +61,9 @@ pub fn run() {
             deploy::commands::run_start_group,
             settings_commands::get_close_window_behavior,
             settings_commands::set_close_window_behavior,
+            settings_commands::get_git_account,
+            settings_commands::set_git_account,
+            settings_commands::clear_git_account,
         ])
         .on_window_event(|window, event| {
             // 关窗行为随设置生效（ticket 11）：最小化到托盘 = 拦截关闭并隐藏；
