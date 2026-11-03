@@ -86,7 +86,9 @@ pub fn check_host_key(
     }
 }
 
-fn fingerprint_of(key: &russh::keys::PublicKeyOrCertificate) -> String {
+/// SHA-256 fingerprint of a presented key in OpenSSH known_hosts format
+/// (`SHA256:...`). Shared with the deploy transport (ticket 10).
+pub(crate) fn fingerprint_of(key: &russh::keys::PublicKeyOrCertificate) -> String {
     key.public_key().fingerprint(HashAlg::Sha256).to_string()
 }
 

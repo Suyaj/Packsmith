@@ -183,7 +183,34 @@ pub async fn start_build(
         unregister_build(&app, &registry, project_id);
     }
 
-    result.map_err(Into::into)
+    let outcome: BuildOutcome = result.map_err(ApiError::from)?;
+
+    // 构建成功后自动连锁部署（ticket 10）：对开着自动连锁开关的部署目标，
+    // 后台触发部署。自动连锁失败不影响本次构建结果。
+    if outcome.success {
+        let candidates: Vec<String> =
+            outcome.artifacts.iter().map(|a| a.file_name.clone()).collect();
+        let default_artifact = {
+            let store = app.state::<Store>();
+            projects::get(&store, project_id)
+                .ok()
+                .flatten()
+                .and_then(|p| p.default_artifact)
+        };
+        if let Some(history_id) = outcome.history_id {
+            if let Err(e) = crate::deploy::commands::auto_chain_after_build(
+                &app,
+                project_id,
+                history_id,
+                &candidates,
+                default_artifact.as_deref(),
+            ) {
+                eprintln!("auto-chain deploy skipped: {e:?}");
+            }
+        }
+    }
+
+    Ok(outcome)
 }
 
 /// 保存项目的构建命令（ticket 07：随项目可编辑并持久化）。保存前校验命令

@@ -375,3 +375,14 @@ fn update_preserves_and_sets_auto_deploy() {
     assert!(updated.auto_deploy);
     assert!(repo::list_for_project(&store, project).unwrap()[0].auto_deploy);
 }
+
+#[test]
+fn get_returns_one_target_by_id_across_projects() {
+    let (_dir, store) = open_store();
+    let project_a = seed_project(&store, "app-a");
+    let server = seed_server(&store, "web-1");
+    let created = repo::create(&store, &new_target(project_a, server)).unwrap();
+    let fetched = repo::get(&store, created.id).unwrap().expect("target exists");
+    assert_eq!(fetched.project_id, project_a);
+    assert!(repo::get(&store, 999).unwrap().is_none());
+}

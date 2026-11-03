@@ -19,6 +19,7 @@ pub fn run() {
         .manage(toolchain::DownloadGuard::default())
         .manage(commands::CloneRegistry::default())
         .manage(build::commands::BuildRegistry::default())
+        .manage(deploy::commands::DeployRegistry::default())
         .invoke_handler(tauri::generate_handler![
             toolchain::toolchain_status,
             toolchain::toolchain_download,
@@ -50,6 +51,10 @@ pub fn run() {
             targets::commands::create_deployment_target,
             targets::commands::update_deployment_target,
             targets::commands::delete_deployment_target,
+            targets::commands::set_target_auto_deploy,
+            deploy::commands::start_deploy,
+            deploy::commands::cancel_deploy,
+            deploy::commands::run_start_group,
             settings_commands::get_close_window_behavior,
             settings_commands::set_close_window_behavior,
         ])

@@ -161,6 +161,18 @@ pub fn delete(store: &Store, id: i64) -> Result<bool, RepoError> {
     Ok(changed > 0)
 }
 
+/// Fetches one deployment target by id, any project.
+pub fn get(store: &Store, id: i64) -> Result<Option<Target>, RepoError> {
+    Ok(store.with(|conn| {
+        conn.query_row(
+            &format!("SELECT {SELECT_COLUMNS} FROM deployment_targets WHERE id = ?1"),
+            [id],
+            row_to_target,
+        )
+        .optional()
+    })?)
+}
+
 /// Toggles 构建成功后自动连锁部署 for one target (ticket 10). Returns
 /// whether the target existed.
 pub fn set_auto_deploy(store: &Store, id: i64, enabled: bool) -> Result<bool, RepoError> {
