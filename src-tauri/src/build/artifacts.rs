@@ -164,6 +164,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(non_snake_case)]
     fn 时间目录名为UTC的YYYYMMDD_HHMMSS() {
         // 2026-01-01T00:00:00Z = 1_767_225_600。
         let t = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_767_225_600);

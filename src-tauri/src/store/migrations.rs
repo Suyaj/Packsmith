@@ -78,6 +78,22 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         name: "ticket 07: projects.build_command (随项目可编辑的构建命令)",
         sql: "ALTER TABLE projects ADD COLUMN build_command TEXT NOT NULL DEFAULT 'mvnd package -DskipTests';",
     },
+    Migration {
+        version: 7,
+        name: "ticket 08: build_history (构建历史) + projects.default_artifact (记住默认构件选择)",
+        sql: "ALTER TABLE projects ADD COLUMN default_artifact TEXT;
+        CREATE TABLE build_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            build_id TEXT NOT NULL UNIQUE,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            branch TEXT NOT NULL,
+            success INTEGER NOT NULL CHECK (success IN (0, 1)),
+            exit_code INTEGER,
+            log_path TEXT NOT NULL,
+            artifacts_dir TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        );",
+    },
 ];
 
 pub(crate) const LATEST_SCHEMA_VERSION: i32 = MIGRATIONS[MIGRATIONS.len() - 1].version;
