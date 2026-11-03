@@ -417,8 +417,12 @@ pub async fn run_build_flow_in(
     let result = (|| async {
         let tc = exec::resolve_toolchain(tools_root)
             .inspect_err(|_| log.write("[Packsmith] 托管工具链缺失，无法执行构建"))?;
-        let spec = exec::build_spawn_spec(&project.build_command, &repo_local, &tc)
-            .inspect_err(|e| log.write(&format!("[Packsmith] 构建命令无效: {e}")))?;
+        // 私服依赖（ticket 18）：settings.xml 已物化才追加 -s，spawn 侧不查盘。
+        let settings_xml = crate::settings_commands::settings_xml_path(appdata);
+        let settings_arg = settings_xml.exists().then_some(settings_xml.as_path());
+        let spec =
+            exec::build_spawn_spec(&project.build_command, &repo_local, settings_arg, &tc)
+                .inspect_err(|e| log.write(&format!("[Packsmith] 构建命令无效: {e}")))?;
 
         let on_log = {
             let log = log.clone();
