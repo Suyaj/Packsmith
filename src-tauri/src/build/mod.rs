@@ -100,7 +100,7 @@ pub struct PreparedWorkspace {
 // ---------------------------------------------------------------------------
 
 /// 实时拉取 `url` 的远端分支列表（仅 `refs/heads/*`，前缀剥除，不含 HEAD
-/// 与 tag）。`url` 也接受本地仓库路径（本地导入的项目走同一通道）。
+/// 与 tag）。`url` 也接受本地路径（本地导入的项目走同一通道）。
 pub fn list_branches(url: &str) -> Result<Vec<String>, ProjectError> {
     // git2 需要一个仓库来创建匿名远端；开一个一次性的空 bare 仓库当跳板，
     // 用完即删。
@@ -137,11 +137,16 @@ fn list_branches_via(repo: &git2::Repository, url: &str) -> Result<Vec<String>, 
     list()
 }
 
-fn unique_suffix() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+/// `at` 距 UNIX_EPOCH 的纳秒数（时钟早于纪元时退化为 0）。仅作命名去重
+/// 后缀，不承担语义；[`unique_suffix`] 与构件库同秒冲突后缀共用。
+pub(crate) fn nanos_since_epoch(at: SystemTime) -> u128 {
+    at.duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0)
+}
+
+fn unique_suffix() -> u128 {
+    nanos_since_epoch(SystemTime::now())
 }
 
 // ---------------------------------------------------------------------------
