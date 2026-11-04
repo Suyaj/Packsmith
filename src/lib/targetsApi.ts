@@ -63,9 +63,11 @@ export function createDeploymentTarget(
 export function updateDeploymentTarget(
   id: number,
   input: TargetInput,
+  projectId: number,
 ): Promise<Target> {
   return invoke("update_deployment_target", {
     id,
+    projectId,
     serverId: input.serverId,
     files: input.files,
     startCommands: input.startCommands,

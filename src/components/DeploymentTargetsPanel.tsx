@@ -178,7 +178,7 @@ function DeploymentTargetsPanel({
       if (form.editingId === null) {
         await createDeploymentTarget(projectId, input);
       } else {
-        await updateDeploymentTarget(form.editingId, input);
+        await updateDeploymentTarget(form.editingId, input, projectId);
       }
       setForm(null);
       setSaveError(null);

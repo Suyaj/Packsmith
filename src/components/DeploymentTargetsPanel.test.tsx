@@ -288,6 +288,8 @@ describe("部署目标面板", () => {
     await waitFor(() => {
       expect(expectInvoke("update_deployment_target").id).toBe(1);
     });
+    // projectId 必传：缺失时 Tauri 会以 invalid args 拒绝命令，保存静默失败（回归）
+    expect(expectInvoke("update_deployment_target").projectId).toBe(5);
     expect(expectInvoke("update_deployment_target").files).toEqual([
       { fileName: "app-1.0.jar", uploadDir: "/srv/app" },
       { fileName: "", uploadDir: "/srv/pick" },
