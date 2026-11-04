@@ -450,3 +450,65 @@ describe("打包面板（构建执行）", () => {
     expect(onClose).toHaveBeenCalled();
   });
 });
+
+// 部署入口（bug 回归）：构建成功后点击「部署」按钮必须渲染 DeployDialog。
+describe("打包面板（部署入口）", () => {
+  const deployServers = [
+    { id: 11, host: "web-1", port: 22, username: "deploy", credential: { type: "password" as const, password: "x" } },
+  ];
+  const deployTargets = [
+    {
+      id: 1,
+      projectId: 7,
+      serverId: 11,
+      startCommands: "sh start.sh",
+      stopCommands: "sh stop.sh",
+      autoDeploy: false,
+      files: [{ id: 101, targetId: 1, fileName: "app-1.0.jar", uploadDir: "/srv/one", position: 0 }],
+    },
+  ];
+
+  it("构建成功后点击部署按钮，DeployDialog 可见", async () => {
+    await openPanelWithBranches({
+      start_build: () => outcomeOk,
+      list_deployment_targets: () => deployTargets,
+      list_servers: () => deployServers,
+      list_build_artifacts: () => [{ file_name: "app-1.0.jar", size: 1024 }],
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "开始打包" }));
+    await screen.findByText("构建成功");
+
+    await userEvent.click(screen.getByTestId("build-deploy"));
+
+    expect(await screen.findByTestId("deploy-dialog")).toBeInTheDocument();
+  });
+
+  // 默认窗口 800×600，构建成功后面板里日志块已占据视口，DeployDialog 追加在
+  // 折叠线以下——若不滚动进可视区域，用户看到的就是「点击没反应」。
+  it("点击部署后对话框滚动进可视区域", async () => {
+    await openPanelWithBranches({
+      start_build: () => outcomeOk,
+      list_deployment_targets: () => deployTargets,
+      list_servers: () => deployServers,
+      list_build_artifacts: () => [{ file_name: "app-1.0.jar", size: 1024 }],
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "开始打包" }));
+    await screen.findByText("构建成功");
+
+    const scrolled: Element[] = [];
+    const spy = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(function (this: Element) {
+        scrolled.push(this);
+      });
+    await userEvent.click(screen.getByTestId("build-deploy"));
+    await screen.findByTestId("deploy-dialog");
+    spy.mockRestore();
+
+    expect(
+      scrolled.some((el) => (el as HTMLElement).dataset.testid === "deploy-dialog"),
+    ).toBe(true);
+  });
+});

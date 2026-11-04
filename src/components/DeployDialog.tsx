@@ -95,6 +95,7 @@ function DeployDialog({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
   const deployIdRef = useRef<number | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
 
   const refresh = useCallback(async () => {
     if (!open) return;
@@ -133,6 +134,12 @@ function DeployDialog({
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // 对话框是内联卡片，挂在打包面板/历史列表的末尾：默认 800×600 窗口里通常
+  // 位于折叠线以下，不滚动进视口用户看到的就是「点击部署没反应」。
+  useEffect(() => {
+    if (open) dialogRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [open]);
 
   if (!open) return null;
 
@@ -270,7 +277,7 @@ function DeployDialog({
     );
 
   return (
-    <Card data-testid="deploy-dialog" className="mt-4">
+    <Card ref={dialogRef} data-testid="deploy-dialog" className="mt-4">
       <CardHeader className="flex flex-row items-center justify-between space-y-0">
         <CardTitle>{t("deploy.title", { project: projectName })}</CardTitle>
         <Button

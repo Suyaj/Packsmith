@@ -179,3 +179,66 @@ describe("构建历史页", () => {
     confirm.mockRestore();
   });
 });
+
+// 部署入口（bug 回归）：点击历史记录行的「部署」按钮必须渲染 DeployDialog。
+describe("构建历史页（部署入口）", () => {
+  const deployServers = [
+    { id: 11, host: "web-1", port: 22, username: "deploy", credential: { type: "password" as const, password: "x" } },
+  ];
+  const deployTargets = [
+    {
+      id: 1,
+      projectId: 2,
+      serverId: 11,
+      startCommands: "sh start.sh",
+      stopCommands: "sh stop.sh",
+      autoDeploy: false,
+      files: [{ id: 101, targetId: 1, fileName: "app-1.0.jar", uploadDir: "/srv/one", position: 0 }],
+    },
+  ];
+
+  it("点击部署按钮后 DeployDialog 可见", async () => {
+    mockBackend({
+      list_build_history: () => entries,
+      list_projects: () => projects,
+      list_deployment_targets: () => deployTargets,
+      list_servers: () => deployServers,
+      list_build_artifacts: () => [{ file_name: "app-1.0.jar", size: 10 }],
+    });
+
+    renderPage();
+    await screen.findAllByTestId("history-row");
+
+    await userEvent.click(screen.getByTestId("deploy-history-3"));
+
+    expect(await screen.findByTestId("deploy-dialog")).toBeInTheDocument();
+  });
+
+  // 部署对话框内联在历史列表之后：记录多时位于折叠线以下，挂载需滚动进视口。
+  it("点击部署后对话框滚动进可视区域", async () => {
+    mockBackend({
+      list_build_history: () => entries,
+      list_projects: () => projects,
+      list_deployment_targets: () => deployTargets,
+      list_servers: () => deployServers,
+      list_build_artifacts: () => [{ file_name: "app-1.0.jar", size: 10 }],
+    });
+
+    renderPage();
+    await screen.findAllByTestId("history-row");
+
+    const scrolled: Element[] = [];
+    const spy = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(function (this: Element) {
+        scrolled.push(this);
+      });
+    await userEvent.click(screen.getByTestId("deploy-history-3"));
+    await screen.findByTestId("deploy-dialog");
+    spy.mockRestore();
+
+    expect(
+      scrolled.some((el) => (el as HTMLElement).dataset.testid === "deploy-dialog"),
+    ).toBe(true);
+  });
+});
