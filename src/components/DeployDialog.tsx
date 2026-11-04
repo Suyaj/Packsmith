@@ -1,6 +1,7 @@
-// 部署对话框（ticket 10 / 17）：从一条构建历史逐个部署目标选择要上传的
-// 构件（一一对应上传），依次部署；展示各目标阶段状态与输出快照；停止失败
-// 中止重启并提供“单独执行启动命令组”；部署进行中可取消。
+// 部署对话框（ticket 10 / 19）：确认解析后的上传计划——每个部署目标逐行展示
+// 其 文件名→目录 映射行（可勾选；产物缺失的行禁用+标红警告；空文件名行
+// 内联补选），上传集合 = 勾选集合。依次部署；展示各目标阶段状态、跳过提示
+// 与输出快照；停止失败中止重启并提供"单独执行启动命令组"；部署进行中可取消。
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -13,25 +14,23 @@ import {
   startDeploy,
   type AutoDeployMessage,
   type DeployPhase,
+  type RowAssignment,
   type TargetAssignment,
   type TargetStatus,
 } from "@/lib/deployApi";
 import { listBuildArtifacts, type ArtifactFile } from "@/lib/historyApi";
 import { listServers } from "@/lib/serversApi";
-import {
-  listDeploymentTargets,
-  setTargetLastArtifact,
-  type Target,
-} from "@/lib/targetsApi";
+import { listDeploymentTargets, type Target, type TargetFile } from "@/lib/targetsApi";
 import { serverLabel } from "./DeploymentTargetsPanel";
 
-/** 每个目标的实时展示状态：状态 + 各阶段输出快照 + 上传进度。 */
+/** 每个目标的实时展示状态：状态 + 各阶段输出快照 + 上传进度 + 跳过提示。 */
 type TargetView = {
   status: TargetStatus;
   outputs: Partial<Record<DeployPhase, { output: string; exit_code: number }>>;
   stopFailed: boolean;
   error: string | null;
   progress: { transferred: number; total: number } | null;
+  notices: string[];
 };
 
 const INITIAL_VIEW: TargetView = {
@@ -40,6 +39,7 @@ const INITIAL_VIEW: TargetView = {
   stopFailed: false,
   error: null,
   progress: null,
+  notices: [],
 };
 
 function backendMessage(e: unknown): string {
@@ -61,6 +61,11 @@ function startErrorMessage(e: unknown, t: (key: string, opts?: Record<string, un
     : t("deploy.deployFailed", { detail });
 }
 
+/** 单行是否可直接解析上传：具名行须在本次构建产物里；空名行依赖补选。 */
+function rowMissing(row: TargetFile, names: string[]): boolean {
+  return row.fileName.trim() !== "" && !names.includes(row.fileName.trim());
+}
+
 function DeployDialog({
   projectId,
   projectName,
@@ -80,9 +85,11 @@ function DeployDialog({
   const [targets, setTargets] = useState<Target[] | null>(null);
   const [serverLabels, setServerLabels] = useState<Map<number, string>>(new Map());
   const [artifacts, setArtifacts] = useState<ArtifactFile[] | null>(null);
-  // 每个目标各自选中的构件文件名（ticket 17 一一对应上传）。
-  const [selectedFiles, setSelectedFiles] = useState<Map<number, string>>(new Map());
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  // 每行上传计划的勾选状态；空名行另存补选的文件名（ticket 19）。
+  const [rowState, setRowState] = useState<Map<number, { checked: boolean; pick: string }>>(
+    new Map(),
+  );
   const [views, setViews] = useState<Map<number, TargetView>>(new Map());
   const [running, setRunning] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -101,23 +108,22 @@ function DeployDialog({
       setServerLabels(new Map(servers.map((s) => [s.id, serverLabel(s)])));
       setArtifacts(artifactList);
       const names = artifactList.map((a) => a.file_name);
-      // 每个目标的默认构件：单产物自动选中；多产物优先记住的上次选择
-      // （ticket 17 per-target last choice），否则退回项目默认构件。
-      const defaults = new Map<number, string>();
+      // 解析后的上传计划：具名行默认勾选（缺失行禁用+警告）；空名行
+      // （部署时补选）默认勾选并预选首个可用产物（优先项目默认构件）。
+      const plan = new Map<number, { checked: boolean; pick: string }>();
+      const fallback = defaultArtifact && names.includes(defaultArtifact) ? defaultArtifact : names[0] ?? "";
       for (const target of targetList) {
-        const preferred =
-          (target.lastArtifact && names.includes(target.lastArtifact)
-            ? target.lastArtifact
-            : null) ??
-          (defaultArtifact && names.includes(defaultArtifact)
-            ? defaultArtifact
-            : null) ??
-          names[0] ??
-          null;
-        if (preferred) defaults.set(target.id, preferred);
+        for (const row of target.files) {
+          if (row.fileName.trim() === "") {
+            plan.set(row.id, { checked: fallback !== "", pick: fallback });
+          } else {
+            plan.set(row.id, { checked: names.includes(row.fileName.trim()), pick: "" });
+          }
+        }
       }
-      setSelectedFiles(defaults);
-      setViews(new Map(targetList.map((target) => [target.id, { ...INITIAL_VIEW, outputs: {} }])));
+      setRowState(plan);
+      setSelectedIds([]);
+      setViews(new Map(targetList.map((target) => [target.id, { ...INITIAL_VIEW, outputs: {}, notices: [] }])));
       setLoadError(null);
     } catch (e) {
       setLoadError(t("deploy.loadFailed", { detail: backendMessage(e) }));
@@ -133,7 +139,7 @@ function DeployDialog({
   const patchView = (targetId: number, patch: Partial<TargetView>) => {
     setViews((prev) => {
       const next = new Map(prev);
-      const current = next.get(targetId) ?? { ...INITIAL_VIEW, outputs: {} };
+      const current = next.get(targetId) ?? { ...INITIAL_VIEW, outputs: {}, notices: [] };
       next.set(targetId, { ...current, ...patch });
       return next;
     });
@@ -161,7 +167,7 @@ function DeployDialog({
       case "output":
         setViews((prev) => {
           const next = new Map(prev);
-          const current = next.get(event.target_id) ?? { ...INITIAL_VIEW, outputs: {} };
+          const current = next.get(event.target_id) ?? { ...INITIAL_VIEW, outputs: {}, notices: [] };
           next.set(event.target_id, {
             ...current,
             outputs: {
@@ -169,6 +175,15 @@ function DeployDialog({
               [event.phase]: { output: event.output, exit_code: event.exit_code },
             },
           });
+          return next;
+        });
+        break;
+      case "skipped":
+        // 跳过提示（空名行未补选 / 缺失产物行）不改目标状态，仅通知。
+        setViews((prev) => {
+          const next = new Map(prev);
+          const current = next.get(event.target_id) ?? { ...INITIAL_VIEW, outputs: {}, notices: [] };
+          next.set(event.target_id, { ...current, notices: [...current.notices, event.message] });
           return next;
         });
         break;
@@ -185,18 +200,35 @@ function DeployDialog({
     }
   };
 
+  /** 一行当前是否可上传：具名且产物在列，或空名行已补选。 */
+  const rowUploadable = (row: TargetFile, names: string[]): boolean => {
+    if (rowMissing(row, names)) return false;
+    if (row.fileName.trim() !== "") return true;
+    return (rowState.get(row.id)?.pick ?? "").trim() !== "";
+  };
+
   const handleStart = async () => {
-    // 每个选中的目标必须有自己的构件选择；提交一一对应的 assignments。
-    const assignments: TargetAssignment[] = selectedIds
-      .map((id) => ({ targetId: id, fileName: selectedFiles.get(id) ?? "" }))
-      .filter((a) => a.fileName !== "");
-    if (assignments.length !== selectedIds.length) return;
+    if (artifacts === null) return;
+    const names = artifacts.map((a) => a.file_name);
+    // 上传集合 = 勾选集合：只提交选中目标里勾选且可解析的行（ticket 19）。
+    const assignments: TargetAssignment[] = (targets ?? [])
+      .filter((target) => selectedIds.includes(target.id))
+      .map((target) => ({
+        targetId: target.id,
+        files: target.files
+          .filter((row) => rowState.get(row.id)?.checked && rowUploadable(row, names))
+          .map(
+            (row): RowAssignment => ({
+              rowId: row.id,
+              // 具名行以后端库内文件名为准；空名行带补选结果。
+              fileName: row.fileName.trim() === "" ? (rowState.get(row.id)?.pick ?? "").trim() : "",
+            }),
+          ),
+      }))
+      .filter((a) => a.files.length > 0);
+    if (assignments.length === 0) return;
     setStartError(null);
     setRunning(true);
-    // 记住每个目标本次的选择（ticket 17），失败不阻塞部署。
-    await Promise.allSettled(
-      assignments.map((a) => setTargetLastArtifact(a.targetId, a.fileName)),
-    );
     const channel = new Channel<AutoDeployMessage>();
     channel.onmessage = handleMessage;
     try {
@@ -226,6 +258,16 @@ function DeployDialog({
   };
 
   const statusText = (status: TargetStatus) => t(`deploy.status.${status}`);
+
+  const names = (artifacts ?? []).map((a) => a.file_name);
+  /** 选中目标里至少有一行可上传，才允许发起部署。 */
+  const hasUploadableRows = (targets ?? [])
+    .filter((target) => selectedIds.includes(target.id))
+    .some((target) =>
+      target.files.some(
+        (row) => rowState.get(row.id)?.checked && rowUploadable(row, names),
+      ),
+    );
 
   return (
     <Card data-testid="deploy-dialog" className="mt-4">
@@ -277,28 +319,86 @@ function DeployDialog({
                   <span>
                     {serverLabels.get(target.serverId) ??
                       t("targets.serverMissing", { serverId: target.serverId })}
-                    <span className="text-muted-foreground"> · {target.uploadDir}</span>
                   </span>
                 </label>
-                {artifacts !== null && artifacts.length > 0 && (
-                  <label className="flex items-center gap-2 text-sm">
-                    <span className="text-muted-foreground">{t("deploy.artifactLabel")}</span>
-                    <select
-                      data-testid={`deploy-artifact-select-${target.id}`}
-                      value={selectedFiles.get(target.id) ?? ""}
-                      disabled={running}
-                      onChange={(e) => {
-                        const fileName = e.target.value;
-                        setSelectedFiles((prev) => new Map(prev).set(target.id, fileName));
-                      }}
-                    >
-                      {artifacts.map((artifact) => (
-                        <option key={artifact.file_name} value={artifact.file_name}>
-                          {artifact.file_name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                {target.files.length > 0 && (
+                  <table className="ml-6 text-sm" data-testid={`deploy-plan-${target.id}`}>
+                    <thead>
+                      <tr className="text-left text-xs text-muted-foreground">
+                        <th className="pr-3 font-normal">{t("deploy.plan.file")}</th>
+                        <th className="font-normal">{t("deploy.plan.dir")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {target.files.map((row) => {
+                        const missing = rowMissing(row, names);
+                        const unnamed = row.fileName.trim() === "";
+                        const checked = rowState.get(row.id)?.checked ?? false;
+                        return (
+                          <tr
+                            key={row.id}
+                            data-testid={`deploy-row-${target.id}-${row.id}`}
+                            className={missing ? "text-destructive" : ""}
+                          >
+                            <td className="pr-3">
+                              <label className="flex items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  data-testid={`deploy-row-check-${target.id}-${row.id}`}
+                                  checked={checked}
+                                  disabled={running || missing}
+                                  onChange={() =>
+                                    setRowState((prev) => {
+                                      const next = new Map(prev);
+                                      const current = prev.get(row.id) ?? { checked, pick: "" };
+                                      next.set(row.id, { ...current, checked: !current.checked });
+                                      return next;
+                                    })
+                                  }
+                                />
+                                <span className="font-mono">
+                                  {unnamed ? t("deploy.plan.unnamedFile") : row.fileName}
+                                </span>
+                              </label>
+                              {missing && (
+                                <span
+                                  role="alert"
+                                  data-testid={`deploy-row-warning-${target.id}-${row.id}`}
+                                  className="text-xs text-destructive"
+                                >
+                                  {t("deploy.plan.missingWarning")}
+                                </span>
+                              )}
+                              {unnamed && !missing && (
+                                <select
+                                  aria-label={t("deploy.plan.pickLabel")}
+                                  data-testid={`deploy-row-select-${target.id}-${row.id}`}
+                                  value={rowState.get(row.id)?.pick ?? ""}
+                                  disabled={running}
+                                  className="ml-2 rounded-md border bg-background px-1 py-0.5 text-xs"
+                                  onChange={(e) =>
+                                    setRowState((prev) => {
+                                      const next = new Map(prev);
+                                      const current = prev.get(row.id) ?? { checked, pick: "" };
+                                      next.set(row.id, { ...current, pick: e.target.value });
+                                      return next;
+                                    })
+                                  }
+                                >
+                                  {names.map((name) => (
+                                    <option key={name} value={name}>
+                                      {name}
+                                    </option>
+                                  ))}
+                                </select>
+                              )}
+                            </td>
+                            <td className="font-mono text-muted-foreground">{row.uploadDir}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 )}
               </div>
             ))}
@@ -320,7 +420,7 @@ function DeployDialog({
               artifacts === null ||
               artifacts.length === 0 ||
               selectedIds.length === 0 ||
-              selectedIds.some((id) => !selectedFiles.get(id))
+              !hasUploadableRows
             }
           >
             {t("deploy.submit")}
@@ -354,6 +454,14 @@ function DeployDialog({
                 </span>
               )}
             </div>
+
+            {view.notices.length > 0 && (
+              <ul data-testid={`deploy-skipped-${targetId}`} className="mt-1 list-inside list-disc text-xs text-amber-600 dark:text-amber-400">
+                {view.notices.map((notice, i) => (
+                  <li key={i}>{notice}</li>
+                ))}
+              </ul>
+            )}
 
             {view.stopFailed && (
               <div className="mt-2">

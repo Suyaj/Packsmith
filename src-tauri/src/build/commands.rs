@@ -189,29 +189,14 @@ pub async fn start_build(
 
     let outcome: BuildOutcome = result.map_err(ApiError::from)?;
 
-    // 构建成功后自动连锁部署（ticket 10）：对开着自动连锁开关的部署目标，
-    // 后台触发部署。自动连锁失败不影响本次构建结果。
+    // 构建成功后自动连锁部署（ticket 10/19）：对开着自动连锁开关的部署目标，
+    // 后台按其 文件名→目录 映射行解析本次构建产物并部署。自动连锁失败不影响
+    // 本次构建结果。
     if outcome.success {
-        let candidates: Vec<String> = outcome
-            .artifacts
-            .iter()
-            .map(|a| a.file_name.clone())
-            .collect();
-        let default_artifact = {
-            let store = app.state::<Store>();
-            projects::get(&store, project_id)
-                .ok()
-                .flatten()
-                .and_then(|p| p.default_artifact)
-        };
         if let Some(history_id) = outcome.history_id {
-            if let Err(e) = crate::deploy::commands::auto_chain_after_build(
-                &app,
-                project_id,
-                history_id,
-                &candidates,
-                default_artifact.as_deref(),
-            ) {
+            if let Err(e) =
+                crate::deploy::commands::auto_chain_after_build(&app, project_id, history_id)
+            {
                 eprintln!("auto-chain deploy skipped: {e:?}");
             }
         }

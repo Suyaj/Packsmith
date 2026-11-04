@@ -120,6 +120,25 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         name: "ticket 17: deployment_targets.last_artifact (记住该目标上次部署选择的构件)",
         sql: "ALTER TABLE deployment_targets ADD COLUMN last_artifact TEXT;",
     },
+    // ticket 19: 上传目录表格化——文件名→目录映射子表。`upload_dir` 列保留但
+    // 废弃（不再读写业务数据，仅避免破坏性迁移）：映射行才是部署上传依据。
+    // 旧数据迁移：每个既有目标回填一行 {file_name: '', upload_dir: 旧目录}，
+    // 空文件名 = 部署时需在对话框内补选。
+    Migration {
+        version: 12,
+        name: "ticket 19: deployment_target_files (文件名→上传目录映射行, FK 级联)",
+        sql: "CREATE TABLE deployment_target_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            target_id INTEGER NOT NULL REFERENCES deployment_targets(id) ON DELETE CASCADE,
+            file_name TEXT NOT NULL DEFAULT '',
+            upload_dir TEXT NOT NULL,
+            position INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX idx_deployment_target_files_target
+            ON deployment_target_files(target_id, position);
+        INSERT INTO deployment_target_files (target_id, file_name, upload_dir, position)
+            SELECT id, '', upload_dir, 0 FROM deployment_targets;",
+    },
 ];
 
 pub(crate) const LATEST_SCHEMA_VERSION: i32 = MIGRATIONS[MIGRATIONS.len() - 1].version;

@@ -59,7 +59,6 @@ fn new_target(project_id: i64, server_id: i64) -> NewTarget {
     NewTarget {
         project_id,
         server_id,
-        upload_dir: "/home/app".to_string(),
         start_commands: "cd /home/app\nsh start.sh start".to_string(),
         stop_commands: "sh start.sh stop".to_string(),
     }
@@ -102,7 +101,8 @@ fn created_target_round_trips_all_fields() {
             id: created.id,
             project_id: project,
             server_id: server,
-            upload_dir: "/home/app".to_string(),
+            // 废弃列（ticket 19）：新目标不再写上传目录，映射行才是数据。
+            upload_dir: String::new(),
             start_commands: "cd /home/app\nsh start.sh start".to_string(),
             stop_commands: "sh start.sh stop".to_string(),
             auto_deploy: false,
@@ -122,7 +122,6 @@ fn command_groups_are_normalized_but_order_preserved() {
         &NewTarget {
             project_id: project,
             server_id: server,
-            upload_dir: "  /home/app  \n".to_string(),
             // Blank lines dropped, surrounding whitespace trimmed, order kept.
             start_commands: "\n  cd /home/app  \n\n   \nsh start.sh start\n".to_string(),
             stop_commands: "  \n".to_string(),
@@ -130,7 +129,6 @@ fn command_groups_are_normalized_but_order_preserved() {
     )
     .unwrap();
 
-    assert_eq!(target.upload_dir, "/home/app");
     assert_eq!(target.start_commands, "cd /home/app\nsh start.sh start");
     assert_eq!(target.stop_commands, "");
 }
@@ -400,4 +398,168 @@ fn get_returns_one_target_by_id_across_projects() {
         .expect("target exists");
     assert_eq!(fetched.project_id, project_a);
     assert!(repo::get(&store, 999).unwrap().is_none());
+}
+
+// ---------------------------------------------------------------------------
+// 文件名→上传目录映射行 (ticket 19)
+// ---------------------------------------------------------------------------
+
+use packsmith_lib::targets::repo::NewTargetFile;
+
+fn file_row(file_name: &str, upload_dir: &str) -> NewTargetFile {
+    NewTargetFile {
+        file_name: file_name.to_string(),
+        upload_dir: upload_dir.to_string(),
+    }
+}
+
+/// 旧数据迁移（migration v12）：每个既有目标回填一行
+/// {file_name: '', upload_dir: 旧目录}；空文件名 = 部署时补选。
+/// 通过把库降级回 v11（删掉子表 + 写入旧形态目标行）再重开模拟升级路径。
+#[test]
+fn migration_v12_backfills_one_unnamed_row_per_existing_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("test.db");
+
+    {
+        let store = Store::open(&db, TEST_KEY_HEX).unwrap();
+        let project = seed_project(&store, "app");
+        let server = seed_server(&store, "web-1");
+        store
+            .with(|conn| {
+                conn.execute_batch(&format!(
+                    "PRAGMA user_version = 11;
+                     DROP TABLE deployment_target_files;
+                     INSERT INTO deployment_targets (project_id, server_id, upload_dir)
+                         VALUES ({project}, {server}, '/legacy/dir');"
+                ))
+            })
+            .unwrap();
+    }
+
+    let store = Store::open(&db, TEST_KEY_HEX).unwrap();
+    let rows = repo::list_files(&store, 1).unwrap();
+    assert_eq!(rows.len(), 1, "legacy target must gain exactly one row");
+    assert_eq!(rows[0].file_name, "", "legacy row is a 部署时补选 row");
+    assert_eq!(rows[0].upload_dir, "/legacy/dir");
+    assert_eq!(rows[0].position, 0);
+}
+
+#[test]
+fn replace_files_round_trips_rows_in_order() {
+    let (_dir, store) = open_store();
+    let project = seed_project(&store, "app");
+    let server = seed_server(&store, "web-1");
+    let target = repo::create(&store, &new_target(project, server)).unwrap();
+
+    let rows = repo::replace_files(
+        &store,
+        target.id,
+        &[
+            file_row("app-1.0.jar", "/srv/app"),
+            file_row("", "/srv/pick-later"),
+            file_row("config.properties", "/srv/etc"),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(
+        rows.iter().map(|r| r.file_name.as_str()).collect::<Vec<_>>(),
+        vec!["app-1.0.jar", "", "config.properties"]
+    );
+    assert_eq!(
+        rows.iter().map(|r| r.upload_dir.as_str()).collect::<Vec<_>>(),
+        vec!["/srv/app", "/srv/pick-later", "/srv/etc"]
+    );
+    assert!(rows.iter().enumerate().all(|(i, r)| r.position == i as i64));
+
+    // 整组替换：第二次保存覆盖第一次。
+    let rows = repo::replace_files(&store, target.id, &[file_row("only.jar", "/srv/x")]).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(repo::list_files(&store, target.id).unwrap().len(), 1);
+
+    // files_for_targets 按目标分组带出。
+    let all = repo::files_for_targets(&store, &[target.id]).unwrap();
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].target_id, target.id);
+}
+
+#[test]
+fn empty_file_names_may_repeat_but_named_duplicates_are_rejected() {
+    let (_dir, store) = open_store();
+    let project = seed_project(&store, "app");
+    let server = seed_server(&store, "web-1");
+    let target = repo::create(&store, &new_target(project, server)).unwrap();
+
+    // 两个空名行（部署时补选）允许共存。
+    repo::replace_files(
+        &store,
+        target.id,
+        &[file_row("", "/srv/a"), file_row("", "/srv/b")],
+    )
+    .unwrap();
+
+    let err = repo::replace_files(
+        &store,
+        target.id,
+        &[file_row("a.jar", "/srv/a"), file_row("a.jar", "/srv/b")],
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, repo::RepoError::DuplicateFileName(ref n) if n == "a.jar"),
+        "got {err:?}"
+    );
+    // 校验失败 = 原子：旧行集不变。
+    assert_eq!(repo::list_files(&store, target.id).unwrap().len(), 2);
+}
+
+#[test]
+fn row_upload_dirs_must_be_single_nonempty_lines() {
+    let (_dir, store) = open_store();
+    let project = seed_project(&store, "app");
+    let server = seed_server(&store, "web-1");
+    let target = repo::create(&store, &new_target(project, server)).unwrap();
+
+    let empty = repo::replace_files(&store, target.id, &[file_row("a.jar", "   ")])
+        .unwrap_err();
+    assert!(matches!(empty, repo::RepoError::EmptyUploadDir), "got {empty:?}");
+
+    let multiline =
+        repo::replace_files(&store, target.id, &[file_row("a.jar", "/a\n/b")]).unwrap_err();
+    assert!(
+        matches!(multiline, repo::RepoError::UploadDirMultiline),
+        "got {multiline:?}"
+    );
+
+    // 目录两侧空白会被规整。
+    let rows = repo::replace_files(&store, target.id, &[file_row("  a.jar  ", "  /srv/app  ")])
+        .unwrap();
+    assert_eq!(rows[0].file_name, "a.jar");
+    assert_eq!(rows[0].upload_dir, "/srv/app");
+}
+
+/// 删除目标时映射行随 FK 级联消失（migration v12 的 ON DELETE CASCADE）。
+#[test]
+fn deleting_the_target_cascades_to_its_mapping_rows() {
+    let (_dir, store) = open_store();
+    let project = seed_project(&store, "app");
+    let server = seed_server(&store, "web-1");
+    let target = repo::create(&store, &new_target(project, server)).unwrap();
+    repo::replace_files(&store, target.id, &[file_row("a.jar", "/srv/a")]).unwrap();
+    assert_eq!(repo::list_files(&store, target.id).unwrap().len(), 1);
+
+    assert!(repo::delete(&store, target.id).unwrap());
+    assert!(repo::list_files(&store, target.id).unwrap().is_empty());
+
+    let orphans: i64 = store
+        .with(|conn| conn.query_row("SELECT count(*) FROM deployment_target_files", [], |r| r.get(0)))
+        .unwrap();
+    assert_eq!(orphans, 0, "target deletion must cascade to its rows");
+}
+
+/// 未知目标上的映射行写入被 FK 拒绝（外键开启）。
+#[test]
+fn replace_files_on_a_missing_target_is_rejected() {
+    let (_dir, store) = open_store();
+    assert!(repo::replace_files(&store, 99_999, &[file_row("a.jar", "/srv/a")]).is_err());
 }

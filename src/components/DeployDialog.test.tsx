@@ -1,6 +1,7 @@
-// 部署对话框（ticket 10 / 17）行为测试：逐目标选择构件（一一对应上传）、
-// 默认值（单产物自动选中 / 记住上次选择）、目标多选、状态/输出快照展示、
-// 停止失败中止重启 + 单独执行启动命令组、取消。
+// 部署对话框（ticket 10 / 19）行为测试：确认解析后的上传计划——逐目标展示
+// 文件名→目录映射行（默认勾选）、产物缺失行禁用+警告、空名行内联补选、
+// 上传集合 = 勾选集合、跳过提示、目标多选、状态/输出快照展示、停止失败
+// 中止重启 + 单独执行启动命令组、取消。
 
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -35,26 +36,32 @@ const servers = [
   { id: 12, host: "web-2", port: 22, username: "deploy", credential: { type: "password" as const, password: "x" } },
 ];
 
+// 目标 1：具名行（产物在列）+ 空名行（部署时补选）；目标 2：一个缺失行 +
+// 一个可解析行。
 const targets: Target[] = [
   {
     id: 1,
     projectId: 5,
     serverId: 11,
-    uploadDir: "/srv/one",
     startCommands: "sh start.sh",
     stopCommands: "sh stop.sh",
     autoDeploy: false,
-    lastArtifact: null,
+    files: [
+      { id: 101, targetId: 1, fileName: "app-1.0.jar", uploadDir: "/srv/one", position: 0 },
+      { id: 102, targetId: 1, fileName: "", uploadDir: "/srv/pick", position: 1 },
+    ],
   },
   {
     id: 2,
     projectId: 5,
     serverId: 12,
-    uploadDir: "/srv/two",
     startCommands: "sh start.sh",
     stopCommands: "sh stop.sh",
     autoDeploy: true,
-    lastArtifact: null,
+    files: [
+      { id: 201, targetId: 2, fileName: "gone-1.0.jar", uploadDir: "/srv/two", position: 0 },
+      { id: 202, targetId: 2, fileName: "other-1.0.jar", uploadDir: "/srv/two-b", position: 1 },
+    ],
   },
 ];
 
@@ -62,6 +69,8 @@ const artifacts = [
   { file_name: "app-1.0.jar", size: 10 },
   { file_name: "other-1.0.jar", size: 20 },
 ];
+
+type Assignment = { targetId: number; files: { rowId: number; fileName: string }[] };
 
 function push(targetId: number, event: DeployEvent) {
   for (const ch of channels) ch.onmessage?.({ deployId: 1, event: { ...event, target_id: targetId } as DeployEvent });
@@ -97,7 +106,7 @@ function mockBackend(overrides: {
       case "list_build_artifacts":
         return overrides.artifacts ?? artifacts;
       case "start_deploy": {
-        const assignments = args.assignments as { targetId: number; fileName: string }[];
+        const assignments = args.assignments as Assignment[];
         for (const a of assignments) {
           push(a.targetId, { type: "started", target_ids: assignments.map((x) => x.targetId) });
           pushSuccess(a.targetId);
@@ -105,8 +114,6 @@ function mockBackend(overrides: {
         push(0, { type: "finished", cancelled: false });
         return { cancelled: false, targets: [] };
       }
-      case "set_target_last_artifact":
-        return true;
       case "cancel_deploy":
         return true;
       case "run_start_group": {
@@ -135,16 +142,19 @@ beforeEach(() => {
 });
 
 describe("DeployDialog", () => {
-  it("列出部署目标（可多选）与逐目标构件选择器，未选择时部署按钮禁用", async () => {
+  it("逐目标展示解析后的上传计划：行默认勾选、目录可见；未选目标时部署按钮禁用", async () => {
     render(
       <DeployDialog projectId={5} projectName="演示项目" historyId={7} open onClose={vi.fn()} />,
     );
 
     expect(await screen.findByText("web-1:22 — deploy")).toBeInTheDocument();
     expect(screen.getByText("web-2:22 — deploy")).toBeInTheDocument();
-    // 每个目标一行，行内有自己的构件选择器（单产物场景下自动选中）。
-    expect(screen.getByTestId("deploy-artifact-select-1")).toBeInTheDocument();
-    expect(screen.getByTestId("deploy-artifact-select-2")).toBeInTheDocument();
+
+    // 目标 1 的两行都默认勾选，目录可见。
+    expect(screen.getByTestId("deploy-row-check-1-101")).toBeChecked();
+    expect(screen.getByTestId("deploy-row-check-1-102")).toBeChecked();
+    expect(screen.getByTestId("deploy-plan-1")).toHaveTextContent("/srv/one");
+    expect(screen.getByTestId("deploy-plan-1")).toHaveTextContent("/srv/pick");
 
     const submit = screen.getByTestId("deploy-submit");
     expect(submit).toBeDisabled();
@@ -153,99 +163,111 @@ describe("DeployDialog", () => {
     expect(submit).toBeEnabled();
   });
 
-  it("单产物时每个目标默认自动选中该产物", async () => {
-    mockBackend({ artifacts: [{ file_name: "only-1.0.jar", size: 10 }] });
-    render(
-      <DeployDialog projectId={5} projectName="演示项目" historyId={7} open onClose={vi.fn()} />,
-    );
-
-    const select1 = (await screen.findByTestId(
-      "deploy-artifact-select-1",
-    )) as HTMLSelectElement;
-    const select2 = screen.getByTestId("deploy-artifact-select-2") as HTMLSelectElement;
-    expect(select1.value).toBe("only-1.0.jar");
-    expect(select2.value).toBe("only-1.0.jar");
-  });
-
-  it("多产物时默认记住该目标上次的选择，无记录则退回第一个产物", async () => {
-    mockBackend({
-      targets: [
-        { ...targets[0], lastArtifact: "other-1.0.jar" },
-        targets[1],
-      ],
-    });
-    render(
-      <DeployDialog projectId={5} projectName="演示项目" historyId={7} open onClose={vi.fn()} />,
-    );
-
-    const select1 = (await screen.findByTestId(
-      "deploy-artifact-select-1",
-    )) as HTMLSelectElement;
-    const select2 = screen.getByTestId("deploy-artifact-select-2") as HTMLSelectElement;
-    expect(select1.value).toBe("other-1.0.jar");
-    expect(select2.value).toBe("app-1.0.jar");
-  });
-
-  it("提交的 payload 中每个目标对应自己选择的文件（一一对应上传）", async () => {
-    render(
-      <DeployDialog projectId={5} projectName="演示项目" historyId={7} open onClose={vi.fn()} />,
-    );
-
-    await userEvent.click(await screen.findByTestId("deploy-target-1"));
-    await userEvent.click(screen.getByTestId("deploy-target-2"));
-    // 目标 2 改选另一个产物。
-    await userEvent.selectOptions(screen.getByTestId("deploy-artifact-select-2"), "other-1.0.jar");
-    await userEvent.click(screen.getByTestId("deploy-submit"));
-
-    await waitFor(() =>
-      expect(screen.getByTestId("deploy-status-1")).toHaveTextContent("部署成功"),
-    );
-    expect(screen.getByTestId("deploy-status-2")).toHaveTextContent("部署成功");
-    // 一次调用携带逐目标的 assignments，且提交时记住各目标的选择。
-    const call = invokeMock.mock.calls.find(([cmd]) => cmd === "start_deploy");
-    expect(call?.[1]).toMatchObject({
-      historyId: 7,
-      assignments: [
-        { targetId: 1, fileName: "app-1.0.jar" },
-        { targetId: 2, fileName: "other-1.0.jar" },
-      ],
-    });
-    expect(invokeMock).toHaveBeenCalledWith("set_target_last_artifact", {
-      id: 1,
-      fileName: "app-1.0.jar",
-    });
-    expect(invokeMock).toHaveBeenCalledWith("set_target_last_artifact", {
-      id: 2,
-      fileName: "other-1.0.jar",
-    });
-  });
-
-  it("未被选中的目标不进入 payload（不存在全部上传路径）", async () => {
+  it("产物缺失行禁用 + 标红警告，不进入 payload；同目标可解析行照常上传", async () => {
     render(
       <DeployDialog projectId={5} projectName="演示项目" historyId={7} open onClose={vi.fn()} />,
     );
 
     await userEvent.click(await screen.findByTestId("deploy-target-2"));
+
+    // 缺失行：禁用 + 警告可见。
+    const missing = screen.getByTestId("deploy-row-check-2-201");
+    expect(missing).toBeDisabled();
+    expect(missing).not.toBeChecked();
+    expect(screen.getByTestId("deploy-row-warning-2-201")).toHaveTextContent("产物缺失");
+    // 可解析行默认勾选。
+    expect(screen.getByTestId("deploy-row-check-2-202")).toBeChecked();
+
     await userEvent.click(screen.getByTestId("deploy-submit"));
+    await waitFor(() =>
+      expect(screen.getByTestId("deploy-status-2")).toHaveTextContent("部署成功"),
+    );
 
     const call = invokeMock.mock.calls.find(([cmd]) => cmd === "start_deploy");
-    expect(call?.[1]).toMatchObject({
-      assignments: [{ targetId: 2, fileName: "app-1.0.jar" }],
-    });
-    expect(call?.[1].assignments).toHaveLength(1);
-    // 未被选中的目标 1 也不被记住选择。
-    expect(invokeMock).not.toHaveBeenCalledWith("set_target_last_artifact", {
-      id: 1,
-      fileName: expect.anything(),
-    });
+    expect(call?.[1].assignments).toEqual([
+      { targetId: 2, files: [{ rowId: 202, fileName: "" }] },
+    ]);
   });
 
-  it("后端拒绝未知构件时展示中文错误文案", async () => {
+  it("空名行内联补选：默认预选首个产物，改动随 payload 提交", async () => {
+    render(
+      <DeployDialog projectId={5} projectName="演示项目" historyId={7} open onClose={vi.fn()} />,
+    );
+
+    await userEvent.click(await screen.findByTestId("deploy-target-1"));
+
+    // 空名行显示「（未指定文件）」+ 内联选择器，默认预选首个产物。
+    expect(screen.getByTestId("deploy-plan-1")).toHaveTextContent("（未指定文件）");
+    const pick = screen.getByTestId("deploy-row-select-1-102") as HTMLSelectElement;
+    expect(pick.value).toBe("app-1.0.jar");
+
+    await userEvent.selectOptions(pick, "other-1.0.jar");
+    await userEvent.click(screen.getByTestId("deploy-submit"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("deploy-status-1")).toHaveTextContent("部署成功"),
+    );
+    const call = invokeMock.mock.calls.find(([cmd]) => cmd === "start_deploy");
+    expect(call?.[1].assignments).toEqual([
+      {
+        targetId: 1,
+        files: [
+          { rowId: 101, fileName: "" },
+          { rowId: 102, fileName: "other-1.0.jar" },
+        ],
+      },
+    ]);
+  });
+
+  it("取消勾选的行不进入 payload（上传集合 = 勾选集合）", async () => {
+    render(
+      <DeployDialog projectId={5} projectName="演示项目" historyId={7} open onClose={vi.fn()} />,
+    );
+
+    await userEvent.click(await screen.findByTestId("deploy-target-1"));
+    await userEvent.click(screen.getByTestId("deploy-row-check-1-101"));
+    await userEvent.click(screen.getByTestId("deploy-submit"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("deploy-status-1")).toHaveTextContent("部署成功"),
+    );
+    const call = invokeMock.mock.calls.find(([cmd]) => cmd === "start_deploy");
+    expect(call?.[1].assignments).toEqual([
+      { targetId: 1, files: [{ rowId: 102, fileName: "app-1.0.jar" }] },
+    ]);
+  });
+
+  it("多目标：各目标的勾选行互不影响，一起进入 payload", async () => {
+    render(
+      <DeployDialog projectId={5} projectName="演示项目" historyId={7} open onClose={vi.fn()} />,
+    );
+
+    await userEvent.click(await screen.findByTestId("deploy-target-1"));
+    await userEvent.click(await screen.findByTestId("deploy-target-2"));
+    await userEvent.click(screen.getByTestId("deploy-submit"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("deploy-status-2")).toHaveTextContent("部署成功"),
+    );
+    const call = invokeMock.mock.calls.find(([cmd]) => cmd === "start_deploy");
+    expect(call?.[1].historyId).toBe(7);
+    expect(call?.[1].assignments).toEqual([
+      {
+        targetId: 1,
+        files: [
+          { rowId: 101, fileName: "" },
+          { rowId: 102, fileName: "app-1.0.jar" },
+        ],
+      },
+      { targetId: 2, files: [{ rowId: 202, fileName: "" }] },
+    ]);
+  });
+
+  it("后端拒绝（artifact_not_found）时展示中文错误文案", async () => {
     invokeMock.mockImplementation(async (command: string) => {
       if (command === "list_deployment_targets") return targets;
       if (command === "list_servers") return servers;
       if (command === "list_build_artifacts") return artifacts;
-      if (command === "set_target_last_artifact") return true;
       if (command === "start_deploy")
         return Promise.reject({ code: "artifact_not_found", message: "artifact missing.jar" });
       return null;
@@ -257,7 +279,34 @@ describe("DeployDialog", () => {
     await userEvent.click(await screen.findByTestId("deploy-target-1"));
     await userEvent.click(screen.getByTestId("deploy-submit"));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("产物列表");
+    expect(await screen.findByText(/产物列表/)).toBeInTheDocument();
+  });
+
+  it("跳过提示（skipped 事件）逐目标可见", async () => {
+    invokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+      if (command === "list_deployment_targets") return targets;
+      if (command === "list_servers") return servers;
+      if (command === "list_build_artifacts") return artifacts;
+      if (command === "start_deploy") {
+        const id = (args.assignments as Assignment[])[0].targetId;
+        push(id, { type: "skipped", target_id: id, message: "row 102 (部署时补选): 未选择构件，已跳过" });
+        pushSuccess(id);
+        push(0, { type: "finished", cancelled: false });
+        return { cancelled: false, targets: [] };
+      }
+      return null;
+    });
+
+    render(
+      <DeployDialog projectId={5} projectName="演示项目" historyId={7} open onClose={vi.fn()} />,
+    );
+    await userEvent.click(await screen.findByTestId("deploy-target-1"));
+    await userEvent.click(screen.getByTestId("deploy-submit"));
+
+    expect(await screen.findByTestId("deploy-skipped-1")).toHaveTextContent(
+      "row 102 (部署时补选): 未选择构件，已跳过",
+    );
+    expect(screen.getByTestId("deploy-status-1")).toHaveTextContent("部署成功");
   });
 
   it("停止失败：不执行启动、错误与停止输出可见、可单独执行启动命令组", async () => {
@@ -265,9 +314,8 @@ describe("DeployDialog", () => {
       if (command === "list_deployment_targets") return targets;
       if (command === "list_servers") return servers;
       if (command === "list_build_artifacts") return artifacts;
-      if (command === "set_target_last_artifact") return true;
       if (command === "start_deploy") {
-        const id = (args.assignments as { targetId: number }[])[0].targetId;
+        const id = (args.assignments as Assignment[])[0].targetId;
         push(id, { type: "phase", target_id: id, phase: "stop", status: "running" });
         push(id, { type: "output", target_id: id, phase: "stop", output: "stop.sh: permission denied", exit_code: 1 });
         push(id, {
@@ -326,7 +374,6 @@ describe("DeployDialog", () => {
       if (command === "list_deployment_targets") return targets;
       if (command === "list_servers") return servers;
       if (command === "list_build_artifacts") return artifacts;
-      if (command === "set_target_last_artifact") return true;
       if (command === "start_deploy") {
         // 部署任务保持进行中（invoke 挂起），直到取消事件到达。
         return new Promise(() => {});
@@ -346,7 +393,7 @@ describe("DeployDialog", () => {
     await userEvent.click(cancel);
     expect(invokeMock).toHaveBeenCalledWith("cancel_deploy", { deployId: 1 });
 
-    // 取消事件到达后目标显示“已取消”。
+    // 取消事件到达后目标显示"已取消"。
     push(1, {
       type: "target_finished",
       target_id: 1,
@@ -365,10 +412,9 @@ describe("DeployDialog", () => {
       if (command === "list_deployment_targets") return targets;
       if (command === "list_servers") return servers;
       if (command === "list_build_artifacts") return artifacts;
-      if (command === "set_target_last_artifact") return true;
       if (command === "start_deploy") {
         // 只推进到上传中途：任务保持进行中，进度条停留可见。
-        const id = (args.assignments as { targetId: number }[])[0].targetId;
+        const id = (args.assignments as Assignment[])[0].targetId;
         push(id, { type: "phase", target_id: id, phase: "upload", status: "running" });
         push(id, { type: "upload_progress", target_id: id, transferred: 5, total: 10 });
         return new Promise(() => {});
