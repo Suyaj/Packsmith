@@ -17,27 +17,35 @@ pub struct ServerLastDeploy {
     pub last_deploy_at: Option<String>,
 }
 
-/// 落一行部署结果。目标已不存在（并发删除）时容忍并忽略。
-pub fn record(store: &Store, target_id: i64, success: bool) -> Result<(), StoreError> {
+/// 落一行部署结果（`operation` = 本次操作类型，票 23）。目标已不存在
+/// （并发删除）时容忍并忽略。
+pub fn record(
+    store: &Store,
+    target_id: i64,
+    success: bool,
+    operation: crate::deploy::engine::DeployOperation,
+) -> Result<(), StoreError> {
     store.with(|conn| {
         conn.execute(
-            "INSERT INTO deploy_records (target_id, success)
-             SELECT ?1, ?2 WHERE EXISTS (SELECT 1 FROM deployment_targets WHERE id = ?1)",
-            rusqlite::params![target_id, success as i64],
+            "INSERT INTO deploy_records (target_id, success, operation)
+             SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM deployment_targets WHERE id = ?1)",
+            rusqlite::params![target_id, success as i64, operation.as_str()],
         )?;
         Ok(())
     })
 }
 
-/// 落盘一次部署的每个目标结果（[`crate::deploy::engine::DeploySummary`]）。
+/// 落盘一次部署的每个目标结果（[`crate::deploy::engine::DeploySummary`]），
+/// 统一记为本次的操作类型 `operation`（票 23）。
 /// 失败目标不阻塞成功目标的记录。
 pub fn record_outcomes(
     store: &Store,
     summary: &crate::deploy::engine::DeploySummary,
+    operation: crate::deploy::engine::DeployOperation,
 ) -> Result<(), StoreError> {
     for outcome in &summary.targets {
         let success = outcome.status == crate::deploy::engine::TargetStatus::Success;
-        record(store, outcome.target_id, success)?;
+        record(store, outcome.target_id, success, operation)?;
     }
     Ok(())
 }

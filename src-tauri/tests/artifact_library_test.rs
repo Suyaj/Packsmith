@@ -374,10 +374,7 @@ fn 默认构件列表_按保存顺序持久化并可整组替换() {
             .unwrap()
             .unwrap()
             .default_artifacts,
-        vec![
-            "b-web-1.0.war".to_string(),
-            "a-api-1.0.jar".to_string()
-        ],
+        vec!["b-web-1.0.war".to_string(), "a-api-1.0.jar".to_string()],
         "列表顺序即保存（勾选）顺序"
     );
 
@@ -411,14 +408,22 @@ fn 默认构件列表_空列表即清空_空名拒绝() {
 
     // 空名/纯空白构件名拒绝。
     for bad in ["", "   "] {
-        let err = projects::set_default_artifacts(&store, project.id, &[bad.to_string()]).unwrap_err();
-        assert!(matches!(err, projects::ProjectError::InvalidArtifact(_)), "case {bad:?}");
+        let err =
+            projects::set_default_artifacts(&store, project.id, &[bad.to_string()]).unwrap_err();
+        assert!(
+            matches!(err, projects::ProjectError::InvalidArtifact(_)),
+            "case {bad:?}"
+        );
     }
     // 列表中混入空名同样拒绝，且不清空既有列表。
     projects::set_default_artifacts(&store, project.id, &["keep.jar".to_string()]).unwrap();
     assert!(
-        projects::set_default_artifacts(&store, project.id, &["ok.jar".to_string(), "".to_string()])
-            .is_err()
+        projects::set_default_artifacts(
+            &store,
+            project.id,
+            &["ok.jar".to_string(), "".to_string()]
+        )
+        .is_err()
     );
     assert_eq!(
         projects::get(&store, project.id)
@@ -440,17 +445,29 @@ fn migration_v13_backfills_non_empty_default_artifact_as_one_element_list() {
     fs::create_dir(dir.path().join("b")).unwrap();
     {
         let store = Store::open(&db, TEST_KEY_HEX).unwrap();
-        let with = projects::import(&store, "with-default", &dir.path().join("a"), ProjectType::Maven)
-            .unwrap();
-        let without =
-            projects::import(&store, "without-default", &dir.path().join("b"), ProjectType::Maven)
-                .unwrap();
-        // 模拟旧库：降回 v12，删掉 v13 子表，直接写旧单值列。
+        let with = projects::import(
+            &store,
+            "with-default",
+            &dir.path().join("a"),
+            ProjectType::Maven,
+        )
+        .unwrap();
+        let without = projects::import(
+            &store,
+            "without-default",
+            &dir.path().join("b"),
+            ProjectType::Maven,
+        )
+        .unwrap();
+        // 模拟旧库：降回 v12，删掉 v13 子表，直接写旧单值列；同时摘掉
+        // v14（票 23）的 deploy_records.operation 列，恢复 v12 的真实形状，
+        // 否则重开库重放 v14 会因列已存在而失败。
         store
             .with(|conn| {
                 conn.execute_batch(&format!(
                     "PRAGMA user_version = 12;
                      DROP TABLE project_default_artifacts;
+                     ALTER TABLE deploy_records DROP COLUMN operation;
                      UPDATE projects SET default_artifact = 'app-1.0.jar' WHERE id = {};
                      UPDATE projects SET default_artifact = '   ' WHERE id = {};",
                     with.id, without.id
