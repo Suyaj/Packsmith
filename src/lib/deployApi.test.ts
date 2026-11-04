@@ -19,6 +19,7 @@ import {
   setTargetAutoDeploy,
   startDeploy,
   type AutoDeployMessage,
+  type DeployOperation,
 } from "./deployApi";
 
 beforeEach(() => {
@@ -26,27 +27,33 @@ beforeEach(() => {
 });
 
 describe("deployApi", () => {
-  it("start_deploy 携带历史 id 与逐目标的行 assignments（上传集合=勾选集合）", async () => {
-    invokeMock.mockResolvedValue({ cancelled: false, targets: [] });
-    const onEvent = { onmessage: null } as never;
-    await startDeploy(
-      7,
-      [
-        { targetId: 1, files: [{ rowId: 11, fileName: "app-1.0.jar" }] },
-        { targetId: 2, files: [{ rowId: 21, fileName: "other-1.0.jar" }] },
-      ],
-      onEvent,
-    );
+  // 票 23：对话框级操作（重启/仅上传/仅停止/仅启动）随 payload 提交。
+  it.each(["restart", "upload", "stop", "start"] as DeployOperation[])(
+    "start_deploy 携带历史 id、操作（%s）与逐目标的行 assignments",
+    async (operation) => {
+      invokeMock.mockResolvedValue({ cancelled: false, targets: [] });
+      const onEvent = { onmessage: null } as never;
+      await startDeploy(
+        7,
+        operation,
+        [
+          { targetId: 1, files: [{ rowId: 11, fileName: "app-1.0.jar" }] },
+          { targetId: 2, files: [{ rowId: 21, fileName: "other-1.0.jar" }] },
+        ],
+        onEvent,
+      );
 
-    expect(invokeMock).toHaveBeenCalledWith("start_deploy", {
-      historyId: 7,
-      assignments: [
-        { targetId: 1, files: [{ rowId: 11, fileName: "app-1.0.jar" }] },
-        { targetId: 2, files: [{ rowId: 21, fileName: "other-1.0.jar" }] },
-      ],
-      onEvent,
-    });
-  });
+      expect(invokeMock).toHaveBeenCalledWith("start_deploy", {
+        historyId: 7,
+        operation,
+        assignments: [
+          { targetId: 1, files: [{ rowId: 11, fileName: "app-1.0.jar" }] },
+          { targetId: 2, files: [{ rowId: 21, fileName: "other-1.0.jar" }] },
+        ],
+        onEvent,
+      });
+    },
+  );
 
   it("cancel_deploy 携带 deployId", async () => {
     invokeMock.mockResolvedValue(true);

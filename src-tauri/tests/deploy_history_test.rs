@@ -10,9 +10,9 @@
 //! 结束后，把每个部署目标的结果落一行（success 标记成败）；"最近部署时间"
 //! = 该服务器所有部署目标里最近一次**成功**部署的时间。
 
-use packsmith_lib::deploy::engine::{DeploySummary, TargetOutcome, TargetStatus};
-use packsmith_lib::store::deploy_history;
+use packsmith_lib::deploy::engine::{DeployOperation, DeploySummary, TargetOutcome, TargetStatus};
 use packsmith_lib::store::Store;
+use packsmith_lib::store::deploy_history;
 use packsmith_lib::targets::repo::{self, NewTarget};
 
 const TEST_KEY_HEX: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
@@ -106,9 +106,9 @@ fn last_deploy_time_is_the_most_recent_successful_deploy() {
     let server = seed_server(&store, "web-1");
     let target = seed_target(&store, project, server);
 
-    deploy_history::record(&store, target, false).unwrap();
-    deploy_history::record(&store, target, true).unwrap();
-    deploy_history::record(&store, target, false).unwrap();
+    deploy_history::record(&store, target, false, DeployOperation::Restart).unwrap();
+    deploy_history::record(&store, target, true, DeployOperation::Restart).unwrap();
+    deploy_history::record(&store, target, false, DeployOperation::Restart).unwrap();
 
     let rows = deploy_history::last_successful_per_server(&store).unwrap();
     assert_eq!(rows.len(), 1);
@@ -125,8 +125,8 @@ fn failed_deploys_do_not_advance_last_deploy_time() {
     let server = seed_server(&store, "web-1");
     let target = seed_target(&store, project, server);
 
-    deploy_history::record(&store, target, true).unwrap();
-    deploy_history::record(&store, target, false).unwrap();
+    deploy_history::record(&store, target, true, DeployOperation::Restart).unwrap();
+    deploy_history::record(&store, target, false, DeployOperation::Restart).unwrap();
 
     let rows = deploy_history::last_successful_per_server(&store).unwrap();
     assert!(rows[0].last_deploy_at.is_some());
@@ -144,9 +144,9 @@ fn last_deploy_time_covers_all_targets_of_the_server() {
     let t2 = seed_target(&store, project_b, server);
     let t_other = seed_target(&store, project_a, other);
 
-    deploy_history::record(&store, t1, true).unwrap();
-    deploy_history::record(&store, t2, true).unwrap();
-    deploy_history::record(&store, t_other, true).unwrap();
+    deploy_history::record(&store, t1, true, DeployOperation::Restart).unwrap();
+    deploy_history::record(&store, t2, true, DeployOperation::Restart).unwrap();
+    deploy_history::record(&store, t_other, true, DeployOperation::Restart).unwrap();
 
     let rows = deploy_history::last_successful_per_server(&store).unwrap();
     assert_eq!(rows.len(), 2, "one row per server");
@@ -199,7 +199,7 @@ fn record_outcomes_persists_one_row_per_target() {
         ],
     };
 
-    deploy_history::record_outcomes(&store, &summary).unwrap();
+    deploy_history::record_outcomes(&store, &summary, DeployOperation::Restart).unwrap();
 
     let total: i64 = store
         .with(|conn| conn.query_row("SELECT count(*) FROM deploy_records", [], |r| r.get(0)))
@@ -208,9 +208,8 @@ fn record_outcomes_persists_one_row_per_target() {
 
     let rows: Vec<(i64, i64)> = store
         .with(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT target_id, success FROM deploy_records ORDER BY target_id",
-            )?;
+            let mut stmt =
+                conn.prepare("SELECT target_id, success FROM deploy_records ORDER BY target_id")?;
             let rows = stmt
                 .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -231,7 +230,7 @@ fn deleting_a_server_cleans_up_its_deploy_records() {
     let project = seed_project(&store, "app");
     let server = seed_server(&store, "web-1");
     let target = seed_target(&store, project, server);
-    deploy_history::record(&store, target, true).unwrap();
+    deploy_history::record(&store, target, true, DeployOperation::Restart).unwrap();
 
     packsmith_lib::server::repo::delete(&store, server).unwrap();
 
@@ -241,4 +240,82 @@ fn deleting_a_server_cleans_up_its_deploy_records() {
     assert_eq!(total, 0, "records cascade with their target");
     let rows = deploy_history::last_successful_per_server(&store).unwrap();
     assert!(rows.is_empty(), "no servers left");
+}
+
+/// 票 23：部署记录带上本次操作类型；列默认值 'restart' 让旧记录读作重启。
+#[test]
+fn records_carry_the_operation_and_old_rows_read_as_restart() {
+    let (_dir, store) = open_store();
+    let project = seed_project(&store, "app");
+    // 部署目标唯一于 (project, server)：每个目标各用一台服务器。
+    let t_old = seed_target(&store, project, seed_server(&store, "web-1"));
+    let t_stop = seed_target(&store, project, seed_server(&store, "web-2"));
+    let t_upload = seed_target(&store, project, seed_server(&store, "web-3"));
+
+    // 旧数据路径：直接落一行不含 operation 列的记录（迁移前样式的插入），
+    // 列默认值必须把它读作 "restart"。
+    store
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO deploy_records (target_id, success) VALUES (?1, 1)",
+                rusqlite::params![t_old],
+            )
+        })
+        .unwrap();
+    deploy_history::record(&store, t_stop, true, DeployOperation::Stop).unwrap();
+    deploy_history::record(&store, t_upload, false, DeployOperation::Upload).unwrap();
+
+    let rows: Vec<(i64, String)> = store
+        .with(|conn| {
+            let mut stmt =
+                conn.prepare("SELECT target_id, operation FROM deploy_records ORDER BY target_id")?;
+            let rows = stmt
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            (t_old, "restart".to_string()),
+            (t_stop, "stop".to_string()),
+            (t_upload, "upload".to_string()),
+        ],
+        "operation recorded per deploy; legacy rows default to restart"
+    );
+}
+
+/// record_outcomes 把整个 summary 按同一操作类型落库。
+#[test]
+fn record_outcomes_persists_the_given_operation() {
+    let (_dir, store) = open_store();
+    let project = seed_project(&store, "app");
+    let server = seed_server(&store, "web-1");
+    let t1 = seed_target(&store, project, server);
+
+    let summary = DeploySummary {
+        cancelled: false,
+        targets: vec![TargetOutcome {
+            target_id: t1,
+            status: TargetStatus::Success,
+            upload: None,
+            stop: None,
+            start: None,
+            stop_failed: false,
+            error: None,
+        }],
+    };
+    deploy_history::record_outcomes(&store, &summary, DeployOperation::Start).unwrap();
+
+    let operation: String = store
+        .with(|conn| {
+            conn.query_row(
+                "SELECT operation FROM deploy_records WHERE target_id = ?1",
+                rusqlite::params![t1],
+                |r| r.get(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(operation, "start");
 }

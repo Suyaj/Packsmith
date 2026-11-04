@@ -157,6 +157,13 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
             SELECT id, default_artifact, 0 FROM projects
             WHERE default_artifact IS NOT NULL AND trim(default_artifact) != '';",
     },
+    // ticket 23: 部署操作拆分（重启/仅上传/仅停止/仅启动）。旧记录由列默认值
+    // 读作 "restart"（拆分前所有部署都是完整重启）。
+    Migration {
+        version: 14,
+        name: "ticket 23: deploy_records.operation (部署操作类型, 旧记录默认 restart)",
+        sql: "ALTER TABLE deploy_records ADD COLUMN operation TEXT NOT NULL DEFAULT 'restart';",
+    },
 ];
 
 pub(crate) const LATEST_SCHEMA_VERSION: i32 = MIGRATIONS[MIGRATIONS.len() - 1].version;

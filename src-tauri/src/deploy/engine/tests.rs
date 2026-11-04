@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 
 use super::{
-    ArtifactRef, ConnInfo, DeployEvent, DeployPlan, DeploySummary, DeployTransport, ExecOutput,
-    TargetJob, TransportError,
+    ArtifactRef, ConnInfo, DeployEvent, DeployOperation, DeployPlan, DeploySummary,
+    DeployTransport, ExecOutput, TargetJob, TransportError,
 };
 use crate::store::projects::new_cancel_flag;
 
@@ -131,9 +131,13 @@ fn job_with_artifacts(id: i64, artifacts: Vec<ArtifactRef>) -> TargetJob {
 
 /// Attaches `artifacts` to every target job (convenience for single-target
 /// plans); multi-target plans build their rows explicitly.
-fn plan(artifacts: Vec<ArtifactRef>, run_stop: bool, targets: Vec<TargetJob>) -> DeployPlan {
+fn plan(
+    artifacts: Vec<ArtifactRef>,
+    operation: DeployOperation,
+    targets: Vec<TargetJob>,
+) -> DeployPlan {
     DeployPlan {
-        run_stop,
+        operation,
         targets: targets
             .into_iter()
             .map(|mut job| {
@@ -256,7 +260,7 @@ async fn uploads_artifact_with_original_filename_to_upload_dir() {
     let summary = run(
         plan(
             vec![artifact(&path, "/srv/app")],
-            true,
+            DeployOperation::Restart,
             vec![job(1, "sh stop.sh", "sh start.sh")],
         ),
         factory,
@@ -288,7 +292,7 @@ async fn per_target_artifacts_upload_distinct_files_to_their_targets() {
     let (factory, mocks) = make_factory(vec![], vec![]);
     let summary = run(
         DeployPlan {
-            run_stop: true,
+            operation: DeployOperation::Restart,
             targets: vec![
                 job_with_artifacts(1, vec![artifact(&a, "/srv/one")]),
                 job_with_artifacts(2, vec![artifact(&b, "/srv/two")]),
@@ -337,7 +341,7 @@ async fn one_target_uploads_each_mapping_row_into_its_own_dir() {
     let (factory, mocks) = make_factory(vec![], vec![]);
     let summary = run(
         DeployPlan {
-            run_stop: true,
+            operation: DeployOperation::Restart,
             targets: vec![job_with_artifacts(
                 1,
                 vec![artifact(&a, "/srv/one"), artifact(&b, "/srv/other")],
@@ -352,7 +356,10 @@ async fn one_target_uploads_each_mapping_row_into_its_own_dir() {
     let map = mocks.lock().unwrap();
     let uploads = map.get(&1).unwrap().uploads.lock().unwrap();
     assert_eq!(
-        uploads.iter().map(|u| (u.remote_dir.as_str(), u.file_name.as_str())).collect::<Vec<_>>(),
+        uploads
+            .iter()
+            .map(|u| (u.remote_dir.as_str(), u.file_name.as_str()))
+            .collect::<Vec<_>>(),
         vec![("/srv/one", "a.jar"), ("/srv/other", "b.jar")],
     );
     // stop/start 各跑一次（不是每行一次）。
@@ -367,13 +374,13 @@ async fn one_target_uploads_each_mapping_row_into_its_own_dir() {
 
 #[tokio::test]
 async fn mixed_plan_uploads_only_targets_with_an_assignment() {
-    // A target without rows (e.g. 单独执行启动命令组) skips the upload
-    // phase while its assigned sibling still uploads.
+    // A target without rows (e.g. 无映射行的目标) skips the upload phase
+    // while its assigned sibling still uploads — within one 重启 plan.
     let (_dir, path) = tmp_artifact("a.jar", b"x");
     let (factory, mocks) = make_factory(vec![], vec![]);
     let summary = run(
         DeployPlan {
-            run_stop: false,
+            operation: DeployOperation::Restart,
             targets: vec![
                 job_with_artifacts(1, vec![artifact(&path, "/srv/one")]),
                 job(2, "sh stop-two", "sh start-two"),
@@ -397,7 +404,7 @@ async fn stop_group_runs_serially_before_start_group() {
     let summary = run(
         plan(
             vec![artifact(&path, "/srv/app")],
-            true,
+            DeployOperation::Restart,
             vec![job(
                 1,
                 "cd /srv/app\nsh stop.sh\nsleep 1",
@@ -432,7 +439,7 @@ async fn stop_failure_aborts_restart_and_surfaces_stop_output() {
     let summary = run(
         plan(
             vec![artifact(&path, "/srv/app")],
-            true,
+            DeployOperation::Restart,
             vec![job(1, "sh stop.sh", "sh start.sh")],
         ),
         factory,
@@ -472,7 +479,7 @@ async fn upload_failure_fails_the_target_and_withholds_the_rest_of_its_rows() {
         super::run_deploy(
             plan(
                 vec![artifact(&path, "/a"), artifact(&path, "/b")],
-                true,
+                DeployOperation::Restart,
                 vec![job(1, "sh stop", "sh start")],
             ),
             factory,
@@ -498,7 +505,7 @@ async fn multiple_targets_deploy_sequentially_in_order() {
     let (factory, mocks) = make_factory(vec![], vec![]);
     let summary = run(
         DeployPlan {
-            run_stop: true,
+            operation: DeployOperation::Restart,
             targets: vec![
                 job_with_artifacts(1, vec![artifact(&a, "/srv/one")]),
                 job_with_artifacts(2, vec![artifact(&a, "/srv/two")]),
@@ -532,7 +539,7 @@ async fn one_targets_failure_does_not_stop_the_next_target() {
     first.start_commands = super::split_command_group("sh start-one");
     let summary = run(
         DeployPlan {
-            run_stop: true,
+            operation: DeployOperation::Restart,
             targets: vec![
                 first,
                 job_with_artifacts(2, vec![artifact(&path, "/srv/two")]),
@@ -565,7 +572,7 @@ async fn connection_failure_fails_only_that_target() {
     let summary = run(
         plan(
             vec![artifact(&path, "/a")],
-            true,
+            DeployOperation::Restart,
             vec![job(1, "s1", "g1"), job(2, "s2", "g2")],
         ),
         factory,
@@ -605,7 +612,7 @@ async fn cancel_between_targets_marks_remaining_cancelled() {
         super::run_deploy(
             plan(
                 vec![artifact(&path, "/a")],
-                true,
+                DeployOperation::Restart,
                 vec![job(1, "s1", "g1"), job(2, "s2", "g2")],
             ),
             factory,
@@ -629,7 +636,7 @@ async fn cancel_before_start_skips_everything() {
     let summary = super::run_deploy(
         plan(
             vec![artifact(&path, "/a")],
-            true,
+            DeployOperation::Restart,
             vec![job(1, "s1", "g1")],
         ),
         factory,
@@ -644,11 +651,15 @@ async fn cancel_before_start_skips_everything() {
 }
 
 #[tokio::test]
-async fn start_only_plan_runs_the_start_group_alone() {
-    // 单独执行启动命令组: no upload, no stop — only the start group.
+async fn start_only_operation_runs_the_start_group_alone() {
+    // 仅启动 (ticket 23): no upload, no stop — only the start group.
     let (factory, mocks) = make_factory(vec![], vec![]);
     let summary = run(
-        plan(vec![], false, vec![job(1, "sh stop", "sh start")]),
+        plan(
+            vec![],
+            DeployOperation::Start,
+            vec![job(1, "sh stop", "sh start")],
+        ),
         factory,
     )
     .await;
@@ -665,25 +676,127 @@ async fn start_only_plan_runs_the_start_group_alone() {
 }
 
 #[tokio::test]
-async fn run_stop_false_skips_stop_but_runs_start_after_upload() {
-    let (_dir, path) = tmp_artifact("a.jar", b"x");
+async fn upload_only_operation_uploads_without_running_command_groups() {
+    // 仅上传 (ticket 23): rows upload into their own dirs; neither command
+    // group runs and no command output snapshots appear.
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a.jar");
+    let b = dir.path().join("b.jar");
+    std::fs::write(&a, b"a-bytes").unwrap();
+    std::fs::write(&b, b"b-bytes").unwrap();
     let (factory, mocks) = make_factory(vec![], vec![]);
     let summary = run(
         plan(
-            vec![artifact(&path, "/a")],
-            false,
+            vec![artifact(&a, "/srv/one"), artifact(&b, "/srv/other")],
+            DeployOperation::Upload,
             vec![job(1, "sh stop", "sh start")],
         ),
         factory,
     )
     .await;
-    assert_eq!(summary.targets[0].status.as_str(), "success");
+
+    let outcome = &summary.targets[0];
+    assert_eq!(outcome.status.as_str(), "success");
+    assert!(outcome.stop.is_none());
+    assert!(outcome.start.is_none());
+    let upload_out = outcome.upload.as_ref().expect("upload snapshot present");
+    assert!(upload_out.combined.contains("/srv/one"));
+    assert!(upload_out.combined.contains("/srv/other"));
+    let map = mocks.lock().unwrap();
+    let uploads = map.get(&1).unwrap().uploads.lock().unwrap();
+    assert_eq!(
+        uploads
+            .iter()
+            .map(|u| (u.remote_dir.as_str(), u.file_name.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("/srv/one", "a.jar"), ("/srv/other", "b.jar")],
+    );
+    assert!(
+        map.get(&1).unwrap().execs.lock().unwrap().is_empty(),
+        "仅上传 must not execute any command group"
+    );
+}
+
+#[tokio::test]
+async fn stop_only_operation_runs_the_stop_group_alone() {
+    // 仅停止 (ticket 23): no upload, no start — only the stop group.
+    let (_dir, path) = tmp_artifact("a.jar", b"x");
+    let (factory, mocks) = make_factory(vec![], vec![]);
+    let summary = run(
+        plan(
+            vec![artifact(&path, "/a")],
+            DeployOperation::Stop,
+            vec![job(1, "sh stop", "sh start")],
+        ),
+        factory,
+    )
+    .await;
+
+    let outcome = &summary.targets[0];
+    assert_eq!(outcome.status.as_str(), "success");
+    assert!(outcome.upload.is_none());
+    assert!(outcome.start.is_none());
+    assert_eq!(outcome.stop.as_ref().unwrap().exit_code, 0);
+    let map = mocks.lock().unwrap();
+    assert!(map.get(&1).unwrap().uploads.lock().unwrap().is_empty());
+    let execs = map.get(&1).unwrap().execs.lock().unwrap();
+    assert_eq!(execs.len(), 1);
+    assert_eq!(execs[0], "sh stop");
+}
+
+#[tokio::test]
+async fn stop_only_operation_failure_is_a_plain_failure_without_the_restart_abortion_flag() {
+    // 仅停止的失败只是本次操作的失败 (ticket 23)：没有"中止重启"语义，
+    // 不设置 stop_failed（前端因此不展示"单独执行启动命令组"恢复入口）。
+    let (_dir, path) = tmp_artifact("a.jar", b"x");
+    let (factory, mocks) = make_factory(vec![], vec![(1, "sh stop")]);
+    let summary = run(
+        plan(
+            vec![artifact(&path, "/a")],
+            DeployOperation::Stop,
+            vec![job(1, "sh stop", "sh start")],
+        ),
+        factory,
+    )
+    .await;
+
+    let outcome = &summary.targets[0];
+    assert_eq!(outcome.status.as_str(), "failed");
+    assert!(outcome.error.is_some());
+    assert!(!outcome.stop_failed, "stop-only failure is not a 重启中止");
+    assert!(outcome.start.is_none());
+    let stop = outcome.stop.as_ref().expect("stop output must be visible");
+    assert_eq!(stop.exit_code, 1);
     let map = mocks.lock().unwrap();
     let execs = map.get(&1).unwrap().execs.lock().unwrap();
     assert_eq!(execs.len(), 1);
-    assert_eq!(execs[0], "sh start");
-    assert!(summary.targets[0].stop.is_none());
-    assert!(summary.targets[0].upload.is_some());
+    assert!(execs[0].contains("stop"));
+}
+
+#[tokio::test]
+async fn operation_helpers_match_each_operations_phases() {
+    // 重启 = 上传 + 停止 + 启动；仅上传只传文件；仅停止/仅启动只跑命令组。
+    let ops = [
+        (DeployOperation::Restart, (true, true, true)),
+        (DeployOperation::Upload, (true, false, false)),
+        (DeployOperation::Stop, (false, true, false)),
+        (DeployOperation::Start, (false, false, true)),
+    ];
+    for (op, (upload, stop, start)) in ops {
+        assert_eq!(op.runs_upload(), upload, "{op:?} upload");
+        assert_eq!(op.runs_stop(), stop, "{op:?} stop");
+        assert_eq!(op.runs_start(), start, "{op:?} start");
+        assert_eq!(op.as_str(), op_str(&op), "{op:?} stable tag for history");
+    }
+}
+
+fn op_str(op: &DeployOperation) -> &'static str {
+    match op {
+        DeployOperation::Restart => "restart",
+        DeployOperation::Upload => "upload",
+        DeployOperation::Stop => "stop",
+        DeployOperation::Start => "start",
+    }
 }
 
 #[tokio::test]
@@ -691,7 +804,7 @@ async fn empty_command_groups_are_no_op_success() {
     let (_dir, path) = tmp_artifact("a.jar", b"x");
     let (factory, mocks) = make_factory(vec![], vec![]);
     let summary = run(
-        plan(vec![artifact(&path, "/a")], true, vec![job(1, "", "")]),
+        plan(vec![artifact(&path, "/a")], DeployOperation::Restart, vec![job(1, "", "")]),
         factory,
     )
     .await;
@@ -724,7 +837,7 @@ async fn events_report_phase_and_output_snapshots() {
     super::run_deploy(
         plan(
             vec![artifact(&path, "/a")],
-            true,
+            DeployOperation::Restart,
             vec![job(7, "sh stop", "sh start")],
         ),
         factory,
@@ -774,7 +887,7 @@ async fn upload_progress_is_reported() {
     super::run_deploy(
         plan(
             vec![artifact(&path, "/a")],
-            true,
+            DeployOperation::Restart,
             vec![job(1, "s", "g")],
         ),
         factory,

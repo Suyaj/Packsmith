@@ -316,6 +316,14 @@
     "targetLabel": "部署目标 #{{id}}",
     "noTargets": "该项目还没有部署目标，请先在项目页配置",
     "noArtifacts": "该构建没有入库构件",
+    "operationLabel": "部署操作",
+    "operations": {
+      "restart": "重启",
+      "upload": "仅上传",
+      "stop": "仅停止",
+      "start": "仅启动"
+    },
+    "planReadonlyHint": "本次操作不传文件，上传计划仅作展示",
     "submit": "部署",
     "cancel": "取消部署",
     "close": "关闭",
