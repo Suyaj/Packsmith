@@ -14,7 +14,6 @@ use crate::store::Store;
 pub struct NewTarget {
     pub project_id: i64,
     pub server_id: i64,
-    pub upload_dir: String,
     pub start_commands: String,
     pub stop_commands: String,
 }
@@ -25,15 +24,35 @@ pub struct Target {
     pub id: i64,
     pub project_id: i64,
     pub server_id: i64,
+    /// 废弃（ticket 19）：上传目录已表格化为 [`TargetFile`] 映射行，此列仅
+    /// 为避免破坏性迁移而保留，不再承载业务数据。
     pub upload_dir: String,
     pub start_commands: String,
     pub stop_commands: String,
     /// 构建成功后自动连锁部署 (auto-chain deploy after a successful build) —
     /// default OFF (spec: 默认关).
     pub auto_deploy: bool,
-    /// 上次该目标部署选择的构件文件名 (ticket 17: 多产物时按目标记住上次
-    /// 选择); `None` = 尚未用该目标部署过.
+    /// 上次该目标部署选择的构件文件名 (ticket 17)；ticket 19 起废弃（映射行
+    /// 自带文件名），列保留、UI 不再使用。
     pub last_artifact: Option<String>,
+}
+
+/// 一行 文件名→上传目录 映射（ticket 19）：部署时按行匹配构建产物并上传到
+/// 该行的目录。`file_name` 为空 = 旧数据迁移出的"部署时补选"行。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TargetFile {
+    pub id: i64,
+    pub target_id: i64,
+    pub file_name: String,
+    pub upload_dir: String,
+    pub position: i64,
+}
+
+/// A new mapping row (ticket 19), not yet persisted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewTargetFile {
+    pub file_name: String,
+    pub upload_dir: String,
 }
 
 /// Splits a 命令组 (command group) into its commands: one per line, each
@@ -95,7 +114,8 @@ pub fn create(store: &Store, target: &NewTarget) -> Result<Target, RepoError> {
         id: 0,
         project_id: target.project_id,
         server_id: target.server_id,
-        upload_dir: target.upload_dir.trim().to_string(),
+        // 废弃列（ticket 19）：上传目录在 deployment_target_files 行里。
+        upload_dir: String::new(),
         start_commands: normalize_commands(&target.start_commands),
         stop_commands: normalize_commands(&target.stop_commands),
         auto_deploy: false,
@@ -130,7 +150,8 @@ pub fn update(store: &Store, target: &Target) -> Result<Target, RepoError> {
         return Err(RepoError::DuplicateBinding);
     }
     let normalized = Target {
-        upload_dir: target.upload_dir.trim().to_string(),
+        // 废弃列（ticket 19）：保持原值不动，业务数据在映射行里。
+        upload_dir: target.upload_dir.clone(),
         start_commands: normalize_commands(&target.start_commands),
         stop_commands: normalize_commands(&target.stop_commands),
         ..target.clone()
@@ -159,10 +180,125 @@ pub fn update(store: &Store, target: &Target) -> Result<Target, RepoError> {
 }
 
 /// Deletes a deployment target. Returns whether a row was actually removed.
+/// The target's 文件名→目录 mapping rows cascade away via the FK.
 pub fn delete(store: &Store, id: i64) -> Result<bool, RepoError> {
     let changed = store
         .with(|conn| conn.execute("DELETE FROM deployment_targets WHERE id = ?1", params![id]))?;
     Ok(changed > 0)
+}
+
+const FILE_COLUMNS: &str = "id, target_id, file_name, upload_dir, position";
+
+fn row_to_file(row: &rusqlite::Row<'_>) -> rusqlite::Result<TargetFile> {
+    Ok(TargetFile {
+        id: row.get("id")?,
+        target_id: row.get("target_id")?,
+        file_name: row.get("file_name")?,
+        upload_dir: row.get("upload_dir")?,
+        position: row.get("position")?,
+    })
+}
+
+/// Lists one target's 文件名→目录 mapping rows in display order (position, id).
+pub fn list_files(store: &Store, target_id: i64) -> Result<Vec<TargetFile>, RepoError> {
+    Ok(store.with(|conn| {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {FILE_COLUMNS} FROM deployment_target_files
+             WHERE target_id = ?1 ORDER BY position, id"
+        ))?;
+        let rows = stmt
+            .query_map([target_id], row_to_file)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    })?)
+}
+
+/// Lists the mapping rows of several targets at once (grouped by the caller
+/// via [`TargetFile::target_id`]), display order within each target.
+pub fn files_for_targets(
+    store: &Store,
+    target_ids: &[i64],
+) -> Result<Vec<TargetFile>, RepoError> {
+    if target_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = target_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+    let params: Vec<i64> = target_ids.to_vec();
+    Ok(store.with(|conn| {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {FILE_COLUMNS} FROM deployment_target_files
+             WHERE target_id IN ({placeholders})
+             ORDER BY target_id, position, id"
+        ))?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(params.iter()), row_to_file)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    })?)
+}
+
+/// Validates one mapping row (ticket 19): the upload dir must be a single
+/// non-empty line; the file name may be empty (部署时补选 legacy row) but the
+/// same non-empty name may not repeat within one target.
+fn normalize_file_rows(files: &[NewTargetFile]) -> Result<Vec<(String, String)>, RepoError> {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    files
+        .iter()
+        .map(|file| {
+            let upload_dir = file.upload_dir.trim().to_string();
+            if upload_dir.is_empty() {
+                return Err(RepoError::EmptyUploadDir);
+            }
+            if upload_dir.lines().count() > 1 {
+                return Err(RepoError::UploadDirMultiline);
+            }
+            let file_name = file.file_name.trim().to_string();
+            if !file_name.is_empty() && !seen.insert(file_name.clone()) {
+                return Err(RepoError::DuplicateFileName(file_name));
+            }
+            Ok((file_name, upload_dir))
+        })
+        .collect()
+}
+
+/// Replaces one target's whole mapping-row set (ticket 19): delete + insert
+/// atomically. Editing the table therefore cannot leave the target with a
+/// half-saved mapping. Returns the persisted rows in display order.
+pub fn replace_files(
+    store: &Store,
+    target_id: i64,
+    files: &[NewTargetFile],
+) -> Result<Vec<TargetFile>, RepoError> {
+    let normalized = normalize_file_rows(files)?;
+    Ok(store.with(|conn| {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
+            "DELETE FROM deployment_target_files WHERE target_id = ?1",
+            params![target_id],
+        )?;
+        for (position, (file_name, upload_dir)) in normalized.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO deployment_target_files
+                     (target_id, file_name, upload_dir, position)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![target_id, file_name, upload_dir, position as i64],
+            )?;
+        }
+        let rows = list_files_in(&tx, target_id)?;
+        tx.commit()?;
+        Ok(rows)
+    })?)
+}
+
+fn list_files_in(conn: &rusqlite::Connection, target_id: i64) -> rusqlite::Result<Vec<TargetFile>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {FILE_COLUMNS} FROM deployment_target_files
+         WHERE target_id = ?1 ORDER BY position, id"
+    ))?;
+    let rows = stmt
+        .query_map([target_id], row_to_file)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 
 /// Fetches one deployment target by id, any project.
@@ -227,6 +363,12 @@ pub enum RepoError {
     MissingServer,
     /// This project already binds that server (project × server is unique).
     DuplicateBinding,
+    /// A mapping row (ticket 19) has an empty upload dir — not allowed.
+    EmptyUploadDir,
+    /// A mapping row's upload dir spans several lines — not allowed.
+    UploadDirMultiline,
+    /// The same non-empty file name appears twice within one target's rows.
+    DuplicateFileName(String),
 }
 
 impl std::fmt::Display for RepoError {
@@ -238,6 +380,13 @@ impl std::fmt::Display for RepoError {
             RepoError::MissingServer => write!(f, "the referenced server does not exist"),
             RepoError::DuplicateBinding => {
                 write!(f, "this project already binds that server")
+            }
+            RepoError::EmptyUploadDir => write!(f, "a mapping row's upload dir must not be empty"),
+            RepoError::UploadDirMultiline => {
+                write!(f, "a mapping row's upload dir must be a single line")
+            }
+            RepoError::DuplicateFileName(name) => {
+                write!(f, "the file name {name:?} appears twice in this target's rows")
             }
         }
     }
@@ -251,6 +400,9 @@ impl RepoError {
             RepoError::MissingProject => "missing_project",
             RepoError::MissingServer => "missing_server",
             RepoError::DuplicateBinding => "duplicate_binding",
+            RepoError::EmptyUploadDir => "empty_upload_dir",
+            RepoError::UploadDirMultiline => "upload_dir_multiline",
+            RepoError::DuplicateFileName(_) => "duplicate_file_name",
         }
     }
 }
