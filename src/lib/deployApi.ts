@@ -42,6 +42,8 @@ export type DeployEvent =
       stop_failed: boolean;
       error: string | null;
     }
+  /** 一条上传行被跳过的提示（ticket 19：空名行/缺失行跳过有提示）。 */
+  | { type: "skipped"; target_id: number; message: string }
   | { type: "finished"; cancelled: boolean };
 
 /** 事件信封：deployId 让前端能在任务进行中取消。 */
@@ -71,12 +73,18 @@ export type DeploySummary = {
 };
 
 /**
- * 发起部署（ticket 17 一一对应上传）：每个目标上传自己选中的那一个构件
- * （原文件名覆盖）→ 停止 → 启动；未被选中的构件绝不上传。
+ * 发起部署（ticket 19 上传计划确认）：每个目标提交其勾选且可解析的
+ * 文件名→目录映射行；上传集合 = 勾选集合（原文件名覆盖，传到各自行目录）。
+ * `fileName` 仅对空名行（部署时补选）有意义——具名行以后端库内文件名为准。
  */
+export type RowAssignment = {
+  rowId: number;
+  fileName: string;
+};
+
 export type TargetAssignment = {
   targetId: number;
-  fileName: string;
+  files: RowAssignment[];
 };
 
 export function startDeploy(

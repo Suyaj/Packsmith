@@ -2,25 +2,42 @@
 // (ticket 09 — CRUD only; execution lives in ticket 10). Every call is
 // `invoke` under the hood; frontend tests mock `@tauri-apps/api/core` and
 // verify these exact payload shapes.
+//
+// ticket 19: 上传目录表格化——目标携带 文件名→目录 映射行 (files)；旧的
+// 单一 uploadDir 字段已废弃，不再出现在接口里。
 
 import { invoke } from "@tauri-apps/api/core";
+
+/** 一行 文件名→上传目录 映射（ticket 19）。fileName 为空 = 部署时补选。 */
+export type TargetFile = {
+  id: number;
+  targetId: number;
+  fileName: string;
+  uploadDir: string;
+  position: number;
+};
+
+/** 新建/保存目标时提交的映射行（整组替换，无 id）。 */
+export type TargetFileInput = {
+  fileName: string;
+  uploadDir: string;
+};
 
 export type Target = {
   id: number;
   projectId: number;
   serverId: number;
-  uploadDir: string;
   startCommands: string;
   stopCommands: string;
   /** 构建成功后自动连锁部署（ticket 10，默认关）。 */
   autoDeploy: boolean;
-  /** 上次该目标部署选择的构件文件名（ticket 17，部署对话框默认选中项）。 */
-  lastArtifact: string | null;
+  /** 文件名→上传目录映射行（ticket 19）。 */
+  files: TargetFile[];
 };
 
 export type TargetInput = {
   serverId: number;
-  uploadDir: string;
+  files: TargetFileInput[];
   startCommands: string;
   stopCommands: string;
   autoDeploy?: boolean;
@@ -37,7 +54,7 @@ export function createDeploymentTarget(
   return invoke("create_deployment_target", {
     projectId,
     serverId: input.serverId,
-    uploadDir: input.uploadDir,
+    files: input.files,
     startCommands: input.startCommands,
     stopCommands: input.stopCommands,
   });
@@ -50,7 +67,7 @@ export function updateDeploymentTarget(
   return invoke("update_deployment_target", {
     id,
     serverId: input.serverId,
-    uploadDir: input.uploadDir,
+    files: input.files,
     startCommands: input.startCommands,
     stopCommands: input.stopCommands,
     autoDeploy: input.autoDeploy ?? false,
@@ -59,9 +76,4 @@ export function updateDeploymentTarget(
 
 export function deleteDeploymentTarget(id: number): Promise<boolean> {
   return invoke("delete_deployment_target", { id });
-}
-
-/** 记住某目标上次部署选择的构件（ticket 17，多产物时按目标默认选中）。 */
-export function setTargetLastArtifact(id: number, fileName: string): Promise<boolean> {
-  return invoke("set_target_last_artifact", { id, fileName });
 }

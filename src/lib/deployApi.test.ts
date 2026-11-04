@@ -26,14 +26,14 @@ beforeEach(() => {
 });
 
 describe("deployApi", () => {
-  it("start_deploy 携带历史 id 与逐目标构件 assignments（一一对应上传）", async () => {
+  it("start_deploy 携带历史 id 与逐目标的行 assignments（上传集合=勾选集合）", async () => {
     invokeMock.mockResolvedValue({ cancelled: false, targets: [] });
     const onEvent = { onmessage: null } as never;
     await startDeploy(
       7,
       [
-        { targetId: 1, fileName: "app-1.0.jar" },
-        { targetId: 2, fileName: "other-1.0.jar" },
+        { targetId: 1, files: [{ rowId: 11, fileName: "app-1.0.jar" }] },
+        { targetId: 2, files: [{ rowId: 21, fileName: "other-1.0.jar" }] },
       ],
       onEvent,
     );
@@ -41,8 +41,8 @@ describe("deployApi", () => {
     expect(invokeMock).toHaveBeenCalledWith("start_deploy", {
       historyId: 7,
       assignments: [
-        { targetId: 1, fileName: "app-1.0.jar" },
-        { targetId: 2, fileName: "other-1.0.jar" },
+        { targetId: 1, files: [{ rowId: 11, fileName: "app-1.0.jar" }] },
+        { targetId: 2, files: [{ rowId: 21, fileName: "other-1.0.jar" }] },
       ],
       onEvent,
     });

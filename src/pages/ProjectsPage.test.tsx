@@ -266,7 +266,9 @@ describe("项目管理页", () => {
             id: 1,
             projectId: 1,
             serverId: 11,
-            uploadDir: "/home/app",
+            files: [
+              { id: 1, targetId: 1, fileName: "app.jar", uploadDir: "/home/app", position: 0 },
+            ],
             startCommands: "cd /home/app\nsh start.sh start",
             stopCommands: "sh start.sh stop",
           },
