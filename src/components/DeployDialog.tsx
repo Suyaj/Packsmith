@@ -72,14 +72,15 @@ function DeployDialog({
   historyId,
   open,
   onClose,
-  defaultArtifact,
+  defaultArtifacts,
 }: {
   projectId: number;
   projectName: string;
   historyId: number;
   open: boolean;
   onClose: () => void;
-  defaultArtifact?: string | null;
+  /** 项目默认构件列表（票 21）：空名行补选预选按序取第一个可用项。 */
+  defaultArtifacts?: string[];
 }) {
   const { t } = useTranslation();
   const [targets, setTargets] = useState<Target[] | null>(null);
@@ -110,9 +111,11 @@ function DeployDialog({
       setArtifacts(artifactList);
       const names = artifactList.map((a) => a.file_name);
       // 解析后的上传计划：具名行默认勾选（缺失行禁用+警告）；空名行
-      // （部署时补选）默认勾选并预选首个可用产物（优先项目默认构件）。
+      // （部署时补选）默认勾选并预选默认构件列表中第一个可用项（票 21，
+      // 依序取用）；列表为空/用尽回退首个可用产物。
       const plan = new Map<number, { checked: boolean; pick: string }>();
-      const fallback = defaultArtifact && names.includes(defaultArtifact) ? defaultArtifact : names[0] ?? "";
+      const fallback =
+        defaultArtifacts?.find((n) => names.includes(n)) ?? names[0] ?? "";
       for (const target of targetList) {
         for (const row of target.files) {
           if (row.fileName.trim() === "") {
@@ -129,7 +132,7 @@ function DeployDialog({
     } catch (e) {
       setLoadError(t("deploy.loadFailed", { detail: backendMessage(e) }));
     }
-  }, [open, projectId, historyId, defaultArtifact, t]);
+  }, [open, projectId, historyId, defaultArtifacts, t]);
 
   useEffect(() => {
     void refresh();

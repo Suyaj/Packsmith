@@ -18,8 +18,8 @@ export type Project = {
   last_branch?: string | null;
   /** 项目构建命令（ticket 07），随项目可编辑。 */
   build_command: string;
-  /** 项目记住的默认构件选择（ticket 08）；从未选择过为 undefined。 */
-  default_artifact?: string | null;
+  /** 项目记住的默认构件列表（票 21，有序）；未保存过（未设置）为 undefined。 */
+  default_artifacts?: string[];
   created_at: string;
 };
 
@@ -111,7 +111,8 @@ export function readBuildLog(buildId: string): Promise<string> {
   return invoke("read_build_log", { buildId });
 }
 
-/** 记住项目的默认构件选择（ticket 08：多构件构建时用户勾选的结果）。 */
-export function setDefaultArtifact(projectId: number, artifact: string): Promise<Project> {
-  return invoke("set_default_artifact", { projectId, artifact });
+/** 保存项目的默认构件列表（票 21：有序，整组替换；空列表 = 清除选择）。
+ *  单选行为与旧"默认构件"一致（单元素列表）。 */
+export function setDefaultArtifacts(projectId: number, artifacts: string[]): Promise<Project> {
+  return invoke("set_default_artifacts", { projectId, artifacts });
 }
