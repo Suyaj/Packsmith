@@ -10,10 +10,12 @@
 
 **Blocked by:** None（基于集成 tip 6f64ac1）
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] 打包面板在克隆完成后展示所选分支最新 3 条提交（短 SHA/作者/时间/首行说明）
-- [ ] 后端从临时工作区读取并经构建事件流推送；无额外远程请求
-- [ ] 读取失败不阻断打包；换分支重打包后列表刷新
-- [ ] 测试：事件内容（fixture 仓库）、前端展示/截断/失败静默
-- [ ] 全套测试绿（cargo 0 警告 / npm / build）
+> 实现：`run_build_flow_in` 克隆完成后调用 `latest_commits`（git2 就地读临时工作区 HEAD revwalk 前 3 条：7 位短 SHA/作者/UNIX 秒时间/`summary()` 首行，任何读取失败返回空不推送、不阻断打包），经 `BuildEvent::Commits` 在克隆进度之后、构建日志之前推送一次，无额外远程请求；前端 `BuildEvent` 增加 `commits` 变体与 `CommitSummary`，打包面板在构建结果区旁渲染"最新提交"列表（说明首行 truncate 截断、本地时区时间），构建结束后保持可见、再次打包随新事件刷新，中文 i18n `projects.build.commitsTitle`。
+
+- [x] 打包面板在克隆完成后展示所选分支最新 3 条提交（短 SHA/作者/时间/首行说明）
+- [x] 后端从临时工作区读取并经构建事件流推送；无额外远程请求
+- [x] 读取失败不阻断打包；换分支重打包后列表刷新
+- [x] 测试：事件内容（fixture 仓库）、前端展示/截断/失败静默
+- [x] 全套测试绿（cargo 0 警告 / npm / build）

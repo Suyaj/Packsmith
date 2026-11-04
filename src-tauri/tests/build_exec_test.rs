@@ -4,6 +4,9 @@
 //! - `build::run_build_flow_in` — the full end-to-end flow: temp workspace
 //!   clone (ticket 06) → managed-toolchain build execution → always-cleanup,
 //!   with live log events and a persisted per-build log file.
+//! - `build::latest_commits` / `BuildEvent::Commits` — the newest 3 commits
+//!   of the checked-out branch, read in place from the temp workspace and
+//!   pushed once after clone, before build logs (ticket 22).
 //!
 //! All tests run against a local fixture git repository and a fake managed
 //! toolchain (a shell script standing in for mvnd), so they are hermetic.
@@ -96,6 +99,8 @@ struct Fixture {
     _dir: tempfile::TempDir,
     store: Store,
     project_id: i64,
+    /// 项目源仓库路径（本地导入），测试可在此基础上追加提交。
+    source_repo: PathBuf,
     temp_root: PathBuf,
     appdata: PathBuf,
     tools: PathBuf,
@@ -113,10 +118,12 @@ fn setup(script: &str) -> Fixture {
     let temp_root = dir.path().join("tmp");
     let appdata = dir.path().join("appdata");
     std::fs::create_dir_all(&temp_root).unwrap();
+    let source_repo = dir.path().join("demo-app");
     Fixture {
         _dir: dir,
         store,
         project_id,
+        source_repo,
         temp_root,
         appdata,
         tools,
@@ -372,6 +379,132 @@ async fn 构建日志可按id读回_非法id被拒绝() {
         build::read_build_log(&fx.appdata, "../secrets"),
         Err(BuildError::LogNotFound(_))
     ));
+}
+
+// ---------------------------------------------------------------------------
+// 最新提交（ticket 22）：克隆完成后就地从临时工作区读取并经事件流推送
+// ---------------------------------------------------------------------------
+
+/// 在源仓库 main 上追加 3 个提交（作者/说明各异），共 4 个提交。
+fn add_three_commits(source_repo: &Path) {
+    let repo = git2::Repository::open(source_repo).unwrap();
+    let head = repo
+        .find_branch("main", git2::BranchType::Local)
+        .unwrap()
+        .into_reference()
+        .peel_to_commit()
+        .unwrap();
+    let commits = [
+        ("alice", "alice@example.com", "add tests"),
+        ("bob", "bob@example.com", "fix bug"),
+        ("carol", "carol@example.com", "feature: streaming"),
+    ];
+    let mut parent = head;
+    for (name, email, message) in commits {
+        let file = format!("{message}.txt");
+        std::fs::write(source_repo.join(&file), "x\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new(&file)).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now(name, email).unwrap();
+        let oid = repo
+            .commit(Some("refs/heads/main"), &sig, &sig, message, &tree, &[&parent])
+            .unwrap();
+        parent = repo.find_commit(oid).unwrap();
+    }
+}
+
+fn commits_events(events: &Events) -> Vec<Vec<build::CommitInfo>> {
+    events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            BuildEvent::Commits { commits } => Some(commits.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn 克隆完成后推送所选分支最新3条提交_位于构建日志之前() {
+    let fx = setup(success_script());
+    add_three_commits(&fx.source_repo);
+
+    let (events, on_event) = event_collector();
+    let cancel = projects::new_cancel_flag();
+
+    let outcome = build::run_build_flow_in(
+        fx.store.clone(),
+        &fx.tools,
+        &fx.appdata,
+        &fx.temp_root,
+        fx.project_id,
+        "main",
+        cancel,
+        on_event,
+    )
+    .await
+    .expect("build flow succeeds");
+
+    assert!(outcome.success);
+
+    // 恰好一次 Commits 事件，内容为最新 3 条（新→旧），短 SHA/作者/时间/首行说明。
+    let all = commits_events(&events);
+    assert_eq!(all.len(), 1, "exactly one Commits event, got {:?}", all);
+    let commits = &all[0];
+    assert_eq!(commits.len(), 3, "got {commits:?}");
+    let messages: Vec<_> = commits.iter().map(|c| c.message.as_str()).collect();
+    assert_eq!(
+        messages,
+        ["feature: streaming", "fix bug", "add tests"],
+        "newest first, first line only"
+    );
+    let authors: Vec<_> = commits.iter().map(|c| c.author.as_str()).collect();
+    assert_eq!(authors, ["carol", "bob", "alice"]);
+    for c in commits {
+        assert_eq!(c.sha.len(), 7, "short sha, got {}", c.sha);
+        assert!(
+            c.sha.bytes().all(|b| b.is_ascii_hexdigit()),
+            "sha is hex, got {}",
+            c.sha
+        );
+        assert!(c.time > 0, "commit time must be set");
+    }
+
+    // 事件顺序：克隆进度（Done）之后、构建日志之前，各一次。
+    let ordered = events.lock().unwrap();
+    let pos = |pred: &dyn Fn(&BuildEvent) -> bool| {
+        ordered
+            .iter()
+            .position(|e| pred(e))
+            .unwrap_or_else(|| panic!("event not found in {:?}", ordered.len()))
+    };
+    let last_clone = ordered
+        .iter()
+        .rposition(|e| matches!(e, BuildEvent::Clone { .. }))
+        .unwrap();
+    let first_log = ordered.iter().position(|e| matches!(e, BuildEvent::Log { .. }));
+    let commits_pos = pos(&|e| matches!(e, BuildEvent::Commits { .. }));
+    assert!(commits_pos > last_clone, "commits after clone progress");
+    assert!(
+        first_log.is_none_or(|p| p > commits_pos),
+        "commits before build logs"
+    );
+}
+
+#[test]
+fn 读取最新提交_非仓库或空仓库返回空_不报错() {
+    // 非仓库目录
+    let dir = tempfile::tempdir().unwrap();
+    assert!(build::latest_commits(dir.path(), 3).is_empty());
+
+    // 空仓库（ unborn HEAD ）
+    let repo_dir = tempfile::tempdir().unwrap();
+    git2::Repository::init(repo_dir.path()).unwrap();
+    assert!(build::latest_commits(repo_dir.path(), 3).is_empty());
 }
 
 // ---------------------------------------------------------------------------

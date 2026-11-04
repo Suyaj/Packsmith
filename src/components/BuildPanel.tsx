@@ -22,6 +22,7 @@ import {
   updateBuildCommand,
   type BuildEvent,
   type BuildOutcome,
+  type CommitSummary,
   type Project,
 } from "@/lib/buildApi";
 
@@ -33,6 +34,11 @@ function isBackendError(e: unknown): e is BackendError {
 
 /** 实时日志视图保留的最多行数（避免超长构建撑爆 DOM）。 */
 const MAX_LOG_LINES = 500;
+
+/** 提交时间（UNIX 秒）按本地时区格式化展示。 */
+function formatCommitTime(time: number): string {
+  return new Date(time * 1000).toLocaleString();
+}
 
 /** 分支项渲染：命中字符按下标高亮（模糊搜索匹配片段）。 */
 function HighlightedBranch({ text, indices }: { text: string; indices: number[] }) {
@@ -71,6 +77,7 @@ function BuildPanel({ project, onClose }: { project: Project; onClose: () => voi
     null,
   );
   const [logLines, setLogLines] = useState<string[]>([]);
+  const [commits, setCommits] = useState<CommitSummary[]>([]);
   const [outcome, setOutcome] = useState<BuildOutcome | null>(null);
   const [fullLog, setFullLog] = useState<string | null>(null);
   const [buildCommand, setBuildCommand] = useState(project.build_command);
@@ -110,6 +117,9 @@ function BuildPanel({ project, onClose }: { project: Project; onClose: () => voi
   function handleEvent(msg: BuildEvent) {
     if (msg.type === "clone") {
       setCloneProgress(msg);
+    } else if (msg.type === "commits") {
+      // 所选分支最新提交（票 22）：随每次打包刷新，读取失败后端不发事件。
+      setCommits(msg.commits);
     } else {
       setLogLines((prev) => [...prev, msg.line].slice(-MAX_LOG_LINES));
     }
@@ -130,6 +140,7 @@ function BuildPanel({ project, onClose }: { project: Project; onClose: () => voi
     setFullLog(null);
     setLogLines([]);
     setCloneProgress(null);
+    setCommits([]);
     setDefaultArtifactSaved(false);
     setSelectedArtifacts([]);
     setBusy(true);
@@ -332,6 +343,28 @@ function BuildPanel({ project, onClose }: { project: Project; onClose: () => voi
                 </p>
               )}
               <p className="text-muted-foreground text-xs">{outcome.log_path}</p>
+            </div>
+          )}
+
+          {/* 最新提交（票 22）：克隆完成后展示所选分支最新 3 条，构建结束后
+              保持可见（紧挨构建结果区），再次打包时随新事件刷新。 */}
+          {commits.length > 0 && (
+            <div>
+              <p className="font-medium">{t("projects.build.commitsTitle")}</p>
+              <ul data-testid="build-commits" className="flex flex-col gap-2 text-sm">
+                {commits.map((c) => (
+                  <li key={c.sha} className="flex flex-col">
+                    <span className="flex flex-wrap items-baseline gap-x-2 text-xs text-muted-foreground">
+                      <code className="font-mono text-foreground">{c.sha}</code>
+                      <span>{c.author}</span>
+                      <time>{formatCommitTime(c.time)}</time>
+                    </span>
+                    <span className="min-w-0 truncate" title={c.message}>
+                      {c.message}
+                    </span>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
 

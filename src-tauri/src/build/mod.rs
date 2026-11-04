@@ -272,6 +272,47 @@ pub enum BuildEvent {
     Log {
         line: String,
     },
+    /// 所选分支最新提交（票 22）：克隆完成后推送一次，读取失败不推送。
+    Commits {
+        commits: Vec<CommitInfo>,
+    },
+}
+
+/// 所选分支的一条提交摘要（票 22）：短 SHA、作者、提交时间与说明首行。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitInfo {
+    /// 短 SHA（7 位十六进制）。
+    pub sha: String,
+    /// 作者名。
+    pub author: String,
+    /// 提交时间（UNIX 秒）。
+    pub time: i64,
+    /// 提交说明首行。
+    pub message: String,
+}
+
+/// 从临时工作区就地读取 HEAD 最新 `take` 条提交（票 22：克隆刚完成、数据
+/// 就在本地，不对远程做额外请求）。任何读取失败（非仓库/空仓库/非提交
+/// 指针）返回空列表——提交展示是增强信息，不阻断打包。
+pub fn latest_commits(workspace: &Path, take: usize) -> Vec<CommitInfo> {
+    let read = || -> Result<Vec<CommitInfo>, git2::Error> {
+        let repo = git2::Repository::open(workspace)?;
+        let head = repo.head()?.peel_to_commit()?;
+        let mut revwalk = repo.revwalk()?;
+        revwalk.push(head.id())?;
+        let mut commits = Vec::new();
+        for oid in revwalk.take(take) {
+            let commit = repo.find_commit(oid?)?;
+            commits.push(CommitInfo {
+                sha: commit.id().to_string()[..7].to_string(),
+                author: commit.author().name().unwrap_or_default().to_string(),
+                time: commit.time().seconds(),
+                message: commit.summary().unwrap_or_default().to_string(),
+            });
+        }
+        Ok(commits)
+    };
+    read().unwrap_or_default()
 }
 
 /// 一次打包的最终结果。`success=false` 表示构建命令以非零码退出（流程本身
@@ -401,6 +442,13 @@ pub async fn run_build_flow_in(
     let ws_path = PathBuf::from(&workspace.path);
     log.write(&format!("[Packsmith] 临时工作区就绪: {}", workspace.path));
     log.write(&format!("[Packsmith] 构建命令: {}", project.build_command));
+
+    // 最新提交（票 22）：克隆完成后就地读取所选分支最新 3 条并推送一次
+    // （事件顺序：克隆进度之后、构建日志之前）；读取失败静默跳过。
+    let commits = latest_commits(&ws_path, 3);
+    if !commits.is_empty() {
+        let _ = on_event(BuildEvent::Commits { commits });
+    }
 
     // 结果路径上都必须清理工作区；用显式清理避免遗漏分支。
     let cleanup = || {

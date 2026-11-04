@@ -60,7 +60,7 @@ export function cancelBuildWorkspace(projectId: number): Promise<void> {
 // 构建执行（ticket 07）
 // ---------------------------------------------------------------------------
 
-/** 打包过程事件：克隆进度或构建日志行（后端 BuildEvent）。 */
+/** 打包过程事件：克隆进度、最新提交或构建日志行（后端 BuildEvent）。 */
 export type BuildEvent =
   | {
       type: "clone";
@@ -68,7 +68,20 @@ export type BuildEvent =
       received?: number | null;
       total?: number | null;
     }
+  | { type: "commits"; commits: CommitSummary[] }
   | { type: "log"; line: string };
+
+/** 所选分支的一条提交摘要（票 22）。 */
+export type CommitSummary = {
+  /** 短 SHA（7 位十六进制）。 */
+  sha: string;
+  /** 作者名。 */
+  author: string;
+  /** 提交时间（UNIX 秒）。 */
+  time: number;
+  /** 提交说明首行。 */
+  message: string;
+};
 
 /** 一次打包的最终结果（失败构建 = success:false，不是 IPC 错误）。 */
 export type BuildOutcome = {
