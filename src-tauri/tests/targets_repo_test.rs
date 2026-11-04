@@ -430,6 +430,7 @@ fn migration_v12_backfills_one_unnamed_row_per_existing_target() {
                 conn.execute_batch(&format!(
                     "PRAGMA user_version = 11;
                      DROP TABLE deployment_target_files;
+                     DROP TABLE IF EXISTS project_default_artifacts;
                      INSERT INTO deployment_targets (project_id, server_id, upload_dir)
                          VALUES ({project}, {server}, '/legacy/dir');"
                 ))

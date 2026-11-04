@@ -305,14 +305,15 @@ pub fn set_build_retention(store: State<'_, Store>, retention: i64) -> Result<()
     crate::store::settings::set_build_retention(&store, retention).map_err(Into::into)
 }
 
-/// 记住项目的默认构件选择（多构件构建时用户勾选的结果）。
+/// 保存项目的默认构件列表（票 21）：多构件构建时用户勾选的有序结果，整组
+/// 原子替换；空列表 = 清除选择。单选行为与旧"默认构件"一致（单元素列表）。
 #[tauri::command]
-pub fn set_default_artifact(
+pub fn set_default_artifacts(
     store: State<'_, Store>,
     project_id: i64,
-    artifact: String,
+    artifacts: Vec<String>,
 ) -> Result<Project, ApiError> {
     projects::get(&store, project_id)?.ok_or(ProjectError::ProjectNotFound(project_id))?;
-    projects::set_default_artifact(&store, project_id, &artifact).map_err(ApiError::from)?;
+    projects::set_default_artifacts(&store, project_id, &artifacts).map_err(ApiError::from)?;
     Ok(projects::get(&store, project_id)?.expect("project was just updated"))
 }

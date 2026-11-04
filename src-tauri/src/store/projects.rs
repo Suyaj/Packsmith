@@ -97,10 +97,12 @@ pub struct Project {
     /// [`DEFAULT_BUILD_COMMAND`]（迁移 v6 落库默认值）。
     #[serde(default)]
     pub build_command: String,
-    /// 该项目记住的默认构件选择（ticket 08，迁移 v7）：多构件构建时用户
-    /// 勾选的结果；单构件构建自动选中。从未选择过为 `None`。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_artifact: Option<String>,
+    /// 项目记住的默认构件列表（票 21，迁移 v13）：多构件构建时用户勾选的
+    /// 有序结果；部署对话框空名行补选预选与自动连锁按此顺序取用。空列表 =
+    /// 未设置（与旧"未保存默认构件"一致）。旧单值列 `default_artifact`
+    /// 已废弃（迁移 v13 回填后不再读写）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub default_artifacts: Vec<String>,
     pub created_at: String,
 }
 
@@ -158,6 +160,9 @@ pub enum ProjectError {
     /// 构建命令为空或仅空白（ticket 07）。
     #[error("invalid build command {0:?}")]
     InvalidBuildCommand(String),
+    /// 默认构件列表中混入空名/纯空白构件名（票 21）。
+    #[error("invalid artifact name {0:?}")]
+    InvalidArtifact(String),
     #[error("store error: {0}")]
     Store(#[from] StoreError),
     #[error("io error: {0}")]
@@ -183,6 +188,7 @@ impl ProjectError {
             ProjectError::SshNotSupported(_) => "ssh_not_supported",
             ProjectError::ProjectNotFound(_) => "project_not_found",
             ProjectError::InvalidBuildCommand(_) => "invalid_build_command",
+            ProjectError::InvalidArtifact(_) => "invalid_artifact",
             ProjectError::Store(_) => "store",
             ProjectError::Io(_) => "io",
         }
@@ -216,21 +222,56 @@ fn row_to_project(row: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
             .expect("project_type is CHECK-constrained to known values"),
         last_branch: row.get("last_branch")?,
         build_command: row.get("build_command")?,
-        default_artifact: row.get("default_artifact")?,
+        // 默认构件列表由 [`attach_default_artifacts`] / [`default_artifacts_in`] 填充。
+        default_artifacts: Vec::new(),
         created_at: row.get("created_at")?,
     })
+}
+
+/// 给一批项目挂上各自的默认构件列表（按 position 有序，票 21）。
+fn attach_default_artifacts(
+    conn: &rusqlite::Connection,
+    projects: &mut [Project],
+) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare(
+        "SELECT project_id, file_name FROM project_default_artifacts ORDER BY project_id, position, id",
+    )?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let project_id: i64 = row.get(0)?;
+        let file_name: String = row.get(1)?;
+        if let Some(p) = projects.iter_mut().find(|p| p.id == project_id) {
+            p.default_artifacts.push(file_name);
+        }
+    }
+    Ok(())
+}
+
+/// 单个项目的默认构件列表（按 position 有序）。
+fn default_artifacts_in(
+    conn: &rusqlite::Connection,
+    project_id: i64,
+) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT file_name FROM project_default_artifacts WHERE project_id = ?1 ORDER BY position, id",
+    )?;
+    let rows = stmt
+        .query_map([project_id], |r| r.get(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
 }
 
 /// 列出全部项目，按创建时间先后（最早在前）。
 pub fn list(store: &Store) -> Result<Vec<Project>, ProjectError> {
     let rows = store.with(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT id, name, source, url, path, project_type, last_branch, build_command, default_artifact, created_at
+            "SELECT id, name, source, url, path, project_type, last_branch, build_command, created_at
              FROM projects ORDER BY created_at, id",
         )?;
-        let rows = stmt
+        let mut rows: Vec<Project> = stmt
             .query_map([], row_to_project)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
+        attach_default_artifacts(conn, &mut rows)?;
         Ok(rows)
     })?;
     Ok(rows)
@@ -286,12 +327,17 @@ pub fn get(store: &Store, id: i64) -> Result<Option<Project>, ProjectError> {
     let project = store.with(|conn| {
         Ok(conn
             .query_row(
-                "SELECT id, name, source, url, path, project_type, last_branch, build_command, default_artifact, created_at
+                "SELECT id, name, source, url, path, project_type, last_branch, build_command, created_at
                  FROM projects WHERE id = ?1",
                 [id],
                 row_to_project,
             )
-            .optional()?)
+            .optional()?
+            .map(|mut p| {
+                p.default_artifacts =
+                    default_artifacts_in(conn, p.id).expect("default artifact list load failed");
+                p
+            }))
     })?;
     Ok(project)
 }
@@ -382,13 +428,21 @@ pub fn import(
 }
 
 fn get_in(conn: &rusqlite::Connection, id: i64) -> rusqlite::Result<Option<Project>> {
-    conn.query_row(
-        "SELECT id, name, source, url, path, project_type, last_branch, build_command, default_artifact, created_at
-         FROM projects WHERE id = ?1",
-        [id],
-        row_to_project,
-    )
-    .optional()
+    match conn
+        .query_row(
+            "SELECT id, name, source, url, path, project_type, last_branch, build_command, created_at
+             FROM projects WHERE id = ?1",
+            [id],
+            row_to_project,
+        )
+        .optional()?
+    {
+        Some(mut p) => {
+            p.default_artifacts = default_artifacts_in(conn, p.id)?;
+            Ok(Some(p))
+        }
+        None => Ok(None),
+    }
 }
 
 /// 记住项目上次打包使用的分支（ticket 06）：下次打开打包面板时默认选中。
@@ -423,23 +477,35 @@ pub fn set_build_command(
     Ok(())
 }
 
-/// 记住项目的默认构件选择（ticket 08）：多构件构建时用户勾选的结果，下次
-/// 打开构件勾选时默认选中。空值拒绝（清除选择暂无 UI 入口）。
-pub fn set_default_artifact(
+/// 保存项目的默认构件列表（票 21，迁移 v13）：多构件构建时用户勾选的有序
+/// 结果，整组原子替换；空列表 = 清除选择（未设置）。构件名不得为空/纯空白。
+/// 旧单值 `projects.default_artifact` 列已废弃（v13 回填后不再读写）。
+pub fn set_default_artifacts(
     store: &Store,
     project_id: i64,
-    artifact: &str,
+    artifacts: &[String],
 ) -> Result<(), ProjectError> {
-    let trimmed = artifact.trim();
-    if trimmed.is_empty() {
-        return Err(ProjectError::InvalidName(artifact.to_string()));
+    let trimmed: Vec<String> = artifacts
+        .iter()
+        .map(|a| a.trim().to_string())
+        .collect();
+    if let Some(bad) = trimmed.iter().find(|a| a.is_empty()) {
+        return Err(ProjectError::InvalidArtifact(bad.clone()));
     }
     store.with(|conn| {
-        conn.execute(
-            "UPDATE projects SET default_artifact = ?1 WHERE id = ?2",
-            rusqlite::params![trimmed, project_id],
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
+            "DELETE FROM project_default_artifacts WHERE project_id = ?1",
+            [project_id],
         )?;
-        Ok(())
+        for (position, name) in trimmed.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO project_default_artifacts (project_id, file_name, position)
+                 VALUES (?1, ?2, ?3)",
+                rusqlite::params![project_id, name, position as i64],
+            )?;
+        }
+        tx.commit()
     })?;
     Ok(())
 }

@@ -8,8 +8,8 @@
 //!   first, across all projects) / delete (artifacts + log + row) / retention
 //!   (keep the most recent N builds per project) / manual per-project cleanup.
 //! - `store::settings` — small key/value settings on `app_meta` (retention N).
-//! - `projects::set_default_artifact` — the remembered default artifact
-//!   selection of a project (migration v7).
+//! - `projects::set_default_artifacts` — the remembered default artifact
+//!   list of a project (migration v13, ticket 21; ordered, empty = unset).
 //! - `build::run_build_flow_in` — end-to-end: on success artifacts are scanned
 //!   and copied into `<appdata>/artifacts/<project>/<build time>/` BEFORE the
 //!   temp workspace is deleted, a history row is written and retention is
@@ -351,33 +351,126 @@ fn 保留次数设置_默认10_可写回() {
 }
 
 // ---------------------------------------------------------------------------
-// 项目默认构件选择（迁移 v7：projects.default_artifact）
+// 项目默认构件列表（迁移 v13：project_default_artifacts，票 21）
 // ---------------------------------------------------------------------------
 
 #[test]
-fn 默认构件选择_被记住并可更新() {
+fn 默认构件列表_按保存顺序持久化并可整组替换() {
     let dir = tempfile::tempdir().unwrap();
     let store = open_store(dir.path());
     let project = projects::import(&store, "demo", &dir.path(), ProjectType::Maven).unwrap();
 
-    assert!(project.default_artifact.is_none());
-    projects::set_default_artifact(&store, project.id, "app-1.0.jar").unwrap();
+    // 从未保存过 = 空列表（与旧"未保存默认构件"一致）。
+    assert!(project.default_artifacts.is_empty());
+
+    projects::set_default_artifacts(
+        &store,
+        project.id,
+        &["b-web-1.0.war".to_string(), "a-api-1.0.jar".to_string()],
+    )
+    .unwrap();
     assert_eq!(
         projects::get(&store, project.id)
             .unwrap()
             .unwrap()
-            .default_artifact
-            .as_deref(),
-        Some("app-1.0.jar")
+            .default_artifacts,
+        vec![
+            "b-web-1.0.war".to_string(),
+            "a-api-1.0.jar".to_string()
+        ],
+        "列表顺序即保存（勾选）顺序"
     );
-    projects::set_default_artifact(&store, project.id, "other.war").unwrap();
+
+    // 整组替换：第二次保存覆盖第一次。
+    projects::set_default_artifacts(&store, project.id, &["only.jar".to_string()]).unwrap();
     assert_eq!(
         projects::get(&store, project.id)
             .unwrap()
             .unwrap()
-            .default_artifact
-            .as_deref(),
-        Some("other.war")
+            .default_artifacts,
+        vec!["only.jar".to_string()]
+    );
+}
+
+#[test]
+fn 默认构件列表_空列表即清空_空名拒绝() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = open_store(dir.path());
+    let project = projects::import(&store, "demo", &dir.path(), ProjectType::Maven).unwrap();
+
+    projects::set_default_artifacts(&store, project.id, &["app.jar".to_string()]).unwrap();
+    // 空列表 = 清除选择（回到"未设置"）。
+    projects::set_default_artifacts(&store, project.id, &[]).unwrap();
+    assert!(
+        projects::get(&store, project.id)
+            .unwrap()
+            .unwrap()
+            .default_artifacts
+            .is_empty()
+    );
+
+    // 空名/纯空白构件名拒绝。
+    for bad in ["", "   "] {
+        let err = projects::set_default_artifacts(&store, project.id, &[bad.to_string()]).unwrap_err();
+        assert!(matches!(err, projects::ProjectError::InvalidArtifact(_)), "case {bad:?}");
+    }
+    // 列表中混入空名同样拒绝，且不清空既有列表。
+    projects::set_default_artifacts(&store, project.id, &["keep.jar".to_string()]).unwrap();
+    assert!(
+        projects::set_default_artifacts(&store, project.id, &["ok.jar".to_string(), "".to_string()])
+            .is_err()
+    );
+    assert_eq!(
+        projects::get(&store, project.id)
+            .unwrap()
+            .unwrap()
+            .default_artifacts,
+        vec!["keep.jar".to_string()],
+        "被拒绝的保存不得破坏既有列表"
+    );
+}
+
+/// 迁移 v13：既有非空单值 `projects.default_artifact` 回填为单元素列表；
+/// 空白/NULL 不回填。原列保留但废弃（与票 19 的 `upload_dir` 同法）。
+#[test]
+fn migration_v13_backfills_non_empty_default_artifact_as_one_element_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("test.db");
+    fs::create_dir(dir.path().join("a")).unwrap();
+    fs::create_dir(dir.path().join("b")).unwrap();
+    {
+        let store = Store::open(&db, TEST_KEY_HEX).unwrap();
+        let with = projects::import(&store, "with-default", &dir.path().join("a"), ProjectType::Maven)
+            .unwrap();
+        let without =
+            projects::import(&store, "without-default", &dir.path().join("b"), ProjectType::Maven)
+                .unwrap();
+        // 模拟旧库：降回 v12，删掉 v13 子表，直接写旧单值列。
+        store
+            .with(|conn| {
+                conn.execute_batch(&format!(
+                    "PRAGMA user_version = 12;
+                     DROP TABLE project_default_artifacts;
+                     UPDATE projects SET default_artifact = 'app-1.0.jar' WHERE id = {};
+                     UPDATE projects SET default_artifact = '   ' WHERE id = {};",
+                    with.id, without.id
+                ))
+            })
+            .unwrap();
+    }
+
+    let store = Store::open(&db, TEST_KEY_HEX).unwrap();
+    let all = projects::list(&store).unwrap();
+    let with = all.iter().find(|p| p.name == "with-default").unwrap();
+    let without = all.iter().find(|p| p.name == "without-default").unwrap();
+    assert_eq!(
+        with.default_artifacts,
+        vec!["app-1.0.jar".to_string()],
+        "非空旧单值回填为单元素列表"
+    );
+    assert!(
+        without.default_artifacts.is_empty(),
+        "空白旧单值不回填（= 未设置）"
     );
 }
 
@@ -554,14 +647,13 @@ async fn 成功构建_构件先入库后删工作区_历史落记录_单构件�
     assert!(Path::new(&row.log_path).is_file());
     assert_eq!(outcome.history_id, Some(row.id));
 
-    // 单构件自动选中并被记住为项目默认。
+    // 单构件自动选中并被记住为项目默认（单元素列表，票 21）。
     assert_eq!(
         projects::get(&fx.store, fx.project_id)
             .unwrap()
             .unwrap()
-            .default_artifact
-            .as_deref(),
-        Some("app-1.0.jar")
+            .default_artifacts,
+        vec!["app-1.0.jar".to_string()]
     );
 }
 
@@ -586,8 +678,8 @@ async fn 多构件构建_全部入库但不自动改默认() {
         projects::get(&fx.store, fx.project_id)
             .unwrap()
             .unwrap()
-            .default_artifact
-            .is_none()
+            .default_artifacts
+            .is_empty()
     );
 }
 

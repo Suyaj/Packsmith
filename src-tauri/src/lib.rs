@@ -41,7 +41,7 @@ pub fn run() {
             build::commands::cleanup_project_history,
             build::commands::get_build_retention,
             build::commands::set_build_retention,
-            build::commands::set_default_artifact,
+            build::commands::set_default_artifacts,
             server::commands::list_servers,
             server::commands::create_server,
             server::commands::update_server,
