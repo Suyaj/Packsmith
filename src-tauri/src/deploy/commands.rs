@@ -28,6 +28,7 @@ use crate::server::repo as server_repo;
 use crate::store::Store;
 use crate::store::deploy_history;
 use crate::store::history;
+use crate::store::projects;
 use crate::store::projects::{CancelFlag, new_cancel_flag};
 use crate::targets::repo as targets_repo;
 
@@ -172,10 +173,13 @@ pub struct TargetAssignment {
     pub files: Vec<RowAssignment>,
 }
 
-/// 解析一个目标的映射行（ticket 19）:
+/// 解析一个目标的映射行（ticket 19 / 21）:
 /// - 具名行（`file_name` 非空）按本次构建的产物列表解析：`strict` 时缺失即
 ///   报错（手动部署的兜底校验）；否则缺失行跳过并记入 skipped（自动连锁）。
-/// - 空名行使用 `picks`（部署对话框内联补选的文件名）；未补选则跳过。
+/// - 空名行使用 `picks`（部署对话框内联补选的文件名）；未补选时按 `defaults`
+///   （项目默认构件列表，票 21）**依序**取第一个在本构建产物里可用的项，
+///   列表用尽回退 `first_available`（本次构建的首个可用产物）；列表为空 =
+///   未设置，跳过（与票 19 行为一致）。
 ///
 /// Returns the resolved uploads (each with its own dir) plus the skipped-row
 /// notices (空名行跳过有提示).
@@ -184,6 +188,8 @@ fn resolve_target_rows(
     artifacts_dir: &str,
     picks: &HashMap<i64, String>,
     strict: bool,
+    defaults: &[String],
+    first_available: Option<&str>,
 ) -> Result<(Vec<engine::ArtifactRef>, Vec<String>), ApiError> {
     let mut artifacts = Vec::new();
     let mut skipped = Vec::new();
@@ -191,10 +197,13 @@ fn resolve_target_rows(
         let chosen = if row.file_name.trim().is_empty() {
             match picks.get(&row.id).map(|p| p.trim().to_string()) {
                 Some(p) if !p.is_empty() => p,
-                _ => {
-                    skipped.push(format!("row {} (部署时补选): 未选择构件，已跳过", row.id));
-                    continue;
-                }
+                _ => match default_for_empty_row(artifacts_dir, defaults, first_available) {
+                    Some(name) => name,
+                    None => {
+                        skipped.push(format!("row {} (部署时补选): 未选择构件，已跳过", row.id));
+                        continue;
+                    }
+                },
             }
         } else {
             row.file_name.trim().to_string()
@@ -214,6 +223,27 @@ fn resolve_target_rows(
         }
     }
     Ok((artifacts, skipped))
+}
+
+/// 空名行的默认构件补选（票 21）：按默认列表顺序取第一个在本次构建产物里
+/// 可用的项；列表用尽（全部缺失）回退首个可用产物；列表为空 = 未设置，
+/// 返回 `None`（由调用方跳过该行）。
+fn default_for_empty_row(
+    artifacts_dir: &str,
+    defaults: &[String],
+    first_available: Option<&str>,
+) -> Option<String> {
+    if defaults.is_empty() {
+        return None;
+    }
+    for name in defaults {
+        let name = name.trim();
+        if !name.is_empty() && artifact_path(artifacts_dir, name).is_ok() {
+            return Some(name.to_string());
+        }
+    }
+    let fallback = first_available?.trim().to_string();
+    (!fallback.is_empty() && artifact_path(artifacts_dir, &fallback).is_ok()).then_some(fallback)
 }
 
 /// 对话框提交的行必须在库内且属于该目标；同一行只能出现一次。
@@ -286,7 +316,7 @@ pub async fn start_deploy(
                 .map(|f| (f.row_id, f.file_name.clone()))
                 .collect();
             let (artifacts, skipped) =
-                resolve_target_rows(&rows, &artifacts_dir, &picks, true)?;
+                resolve_target_rows(&rows, &artifacts_dir, &picks, true, &[], None)?;
             notices.extend(
                 skipped
                     .into_iter()
@@ -381,11 +411,14 @@ pub async fn run_start_group(
 
 /// 构建成功后自动连锁部署 hook: for every target of the project with the
 /// toggle ON, resolve its mapping rows (ticket 19) against the just-built
-/// build's artifact directory. Only rows with a non-empty file name that
-/// resolve upload; 空名行 (部署时补选) are skipped — each with a `Skipped`
-/// notice event. A target with no resolvable rows is skipped entirely (never
-/// restart without a fresh artifact). Events go out as `deploy-event` app
-/// events (`AutoDeployEvent` envelope).
+/// build's artifact directory. Named rows must resolve to upload; 空名行
+/// (部署时补选) fall back to the project's ordered default artifact list
+/// (票 21): the first list entry available in this build, or — once the list
+/// is exhausted — the build's first available artifact (empty list = unset:
+/// the row is skipped, each with a `Skipped` notice event). A target with no
+/// resolvable rows is skipped entirely (never restart without a fresh
+/// artifact). Events go out as `deploy-event` app events (`AutoDeployEvent`
+/// envelope).
 pub fn auto_chain_after_build(
     app: &AppHandle,
     project_id: i64,
@@ -418,9 +451,25 @@ pub fn auto_chain_after_build(
             .filter(|r| r.target_id == target_id)
             .cloned()
             .collect();
-        // Lenient: missing / unnamed rows skip with a notice instead of
-        // failing the auto-chain (自动连锁只传可解析行).
-        let (artifacts, skipped) = resolve_target_rows(&rows, &artifacts_dir, &HashMap::new(), false)?;
+        // Lenient: missing rows skip with a notice instead of failing the
+        // auto-chain (自动连锁只传可解析行). 空名行按项目默认构件列表顺序
+        // 补选（票 21），列表用尽回退本次构建的首个可用产物；列表为空 =
+        // 未设置，照旧跳过。
+        let defaults = projects::get(&store, project_id)
+            .map_err(ApiError::from)?
+            .map(|p| p.default_artifacts)
+            .unwrap_or_default();
+        let first_available = history::list_artifacts(&entry)
+            .ok()
+            .and_then(|files| files.first().map(|f| f.file_name.clone()));
+        let (artifacts, skipped) = resolve_target_rows(
+            &rows,
+            &artifacts_dir,
+            &HashMap::new(),
+            false,
+            &defaults,
+            first_available.as_deref(),
+        )?;
         skipped_notices.extend(skipped.into_iter().map(|m| (target_id, m)));
         if artifacts.is_empty() {
             skipped_notices.push((
@@ -507,7 +556,7 @@ mod tests {
         let rows = vec![row(1, 10, "app.jar", "/srv/app")];
 
         let (artifacts, skipped) =
-            resolve_target_rows(&rows, dir.path().to_str().unwrap(), &HashMap::new(), true)
+            resolve_target_rows(&rows, dir.path().to_str().unwrap(), &HashMap::new(), true, &[], None)
                 .unwrap();
         assert_eq!(artifacts.len(), 1);
         assert_eq!(artifacts[0].file_name, "app.jar");
@@ -523,12 +572,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let rows = vec![row(2, 10, "gone.jar", "/srv/app")];
 
-        let err = resolve_target_rows(&rows, dir.path().to_str().unwrap(), &HashMap::new(), true)
+        let err = resolve_target_rows(&rows, dir.path().to_str().unwrap(), &HashMap::new(), true, &[], None)
             .unwrap_err();
         assert_eq!(err.code(), "artifact_not_found");
 
         let (artifacts, skipped) =
-            resolve_target_rows(&rows, dir.path().to_str().unwrap(), &HashMap::new(), false)
+            resolve_target_rows(&rows, dir.path().to_str().unwrap(), &HashMap::new(), false, &[], None)
                 .unwrap();
         assert!(artifacts.is_empty());
         assert_eq!(skipped.len(), 1);
@@ -544,7 +593,7 @@ mod tests {
 
         // 未补选：跳过（有提示），什么也不上传。
         let (artifacts, skipped) =
-            resolve_target_rows(&rows, dir.path().to_str().unwrap(), &HashMap::new(), true)
+            resolve_target_rows(&rows, dir.path().to_str().unwrap(), &HashMap::new(), true, &[], None)
                 .unwrap();
         assert!(artifacts.is_empty());
         assert_eq!(skipped.len(), 1);
@@ -552,11 +601,74 @@ mod tests {
         // 补选后按补选的文件名解析，上传目录仍是该行自己的目录。
         let picks = HashMap::from([(3i64, "picked.jar".to_string())]);
         let (artifacts, skipped) =
-            resolve_target_rows(&rows, dir.path().to_str().unwrap(), &picks, true).unwrap();
+            resolve_target_rows(&rows, dir.path().to_str().unwrap(), &picks, true, &[], None)
+                .unwrap();
         assert_eq!(artifacts.len(), 1);
         assert_eq!(artifacts[0].file_name, "picked.jar");
         assert_eq!(artifacts[0].upload_dir, "/srv/app");
         assert!(skipped.is_empty());
+    }
+
+    /// 票 21 自动连锁：空名行按项目默认构件列表**顺序**取用——取列表中第一
+    /// 个在本构建产物里可用的项；列表用尽（全部缺失）回退首个可用产物。
+    #[test]
+    fn auto_chain_empty_row_uses_default_list_in_order_with_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.jar"), b"x").unwrap();
+        std::fs::write(dir.path().join("b.jar"), b"x").unwrap();
+        let dir_str = dir.path().to_str().unwrap();
+        let rows = vec![row(1, 10, "", "/srv/app")];
+
+        // 列表头项可用：直接取用。
+        let defaults = vec!["a.jar".to_string(), "b.jar".to_string()];
+        let (artifacts, skipped) = resolve_target_rows(
+            &rows, dir_str, &HashMap::new(), false, &defaults, Some("a.jar"),
+        )
+        .unwrap();
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].file_name, "a.jar");
+        assert!(skipped.is_empty());
+
+        // 列表前项缺失：依序取到第一个可用的项。
+        let defaults = vec!["gone.jar".to_string(), "b.jar".to_string()];
+        let (artifacts, _) = resolve_target_rows(
+            &rows, dir_str, &HashMap::new(), false, &defaults, Some("a.jar"),
+        )
+        .unwrap();
+        assert_eq!(artifacts[0].file_name, "b.jar");
+
+        // 列表用尽（全部缺失）：回退首个可用产物。
+        let defaults = vec!["gone1.jar".to_string(), "gone2.jar".to_string()];
+        let (artifacts, _) = resolve_target_rows(
+            &rows, dir_str, &HashMap::new(), false, &defaults, Some("a.jar"),
+        )
+        .unwrap();
+        assert_eq!(artifacts[0].file_name, "a.jar");
+
+        // 构建无任何产物：列表再非空也无处可取，跳过。
+        let (artifacts, skipped) = resolve_target_rows(
+            &rows, dir_str, &HashMap::new(), false, &defaults, None,
+        )
+        .unwrap();
+        assert!(artifacts.is_empty());
+        assert_eq!(skipped.len(), 1);
+
+        // 空列表 = 未设置：跳过（与票 19 行为一致），不凭空回退。
+        let (artifacts, skipped) = resolve_target_rows(
+            &rows, dir_str, &HashMap::new(), false, &[], Some("a.jar"),
+        )
+        .unwrap();
+        assert!(artifacts.is_empty());
+        assert_eq!(skipped.len(), 1);
+
+        // 对话框补选（picks）优先于默认列表。
+        let picks = HashMap::from([(1i64, "b.jar".to_string())]);
+        let defaults = vec!["a.jar".to_string()];
+        let (artifacts, _) = resolve_target_rows(
+            &rows, dir_str, &picks, false, &defaults, Some("a.jar"),
+        )
+        .unwrap();
+        assert_eq!(artifacts[0].file_name, "b.jar");
     }
 
     /// 自动连锁（lenient）只保留可解析行：具名且产物存在；空名行与缺失行
@@ -571,9 +683,16 @@ mod tests {
             row(3, 10, "missing.jar", "/srv/missing"),
         ];
 
-        let (artifacts, skipped) =
-            resolve_target_rows(&rows, dir.path().to_str().unwrap(), &HashMap::new(), false)
-                .unwrap();
+        // 项目未设置默认构件列表（空列表 = 未设置）：空名行跳过（票 19 行为）。
+        let (artifacts, skipped) = resolve_target_rows(
+            &rows,
+            dir.path().to_str().unwrap(),
+            &HashMap::new(),
+            false,
+            &[],
+            None,
+        )
+        .unwrap();
         assert_eq!(
             artifacts.iter().map(|a| a.file_name.as_str()).collect::<Vec<_>>(),
             vec!["a.jar"]
