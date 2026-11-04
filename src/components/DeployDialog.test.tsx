@@ -288,6 +288,7 @@ describe("DeployDialog", () => {
     );
     const call = invokeMock.mock.calls.find(([cmd]) => cmd === "start_deploy");
     expect(call?.[1].historyId).toBe(7);
+    expect(call?.[1].operation).toBe("restart");
     expect(call?.[1].assignments).toEqual([
       {
         targetId: 1,
@@ -508,5 +509,124 @@ describe("DeployDialog", () => {
     await waitFor(() =>
       expect(screen.getByTestId("deploy-status-1")).toHaveTextContent("部署成功"),
     );
+  });
+
+  // 票 23：对话框级操作选择——重启（默认）/ 仅上传 / 仅停止 / 仅启动。
+  it("操作选择器默认重启，四个操作可选", async () => {
+    render(
+      <DeployDialog projectId={5} projectName="演示项目" historyId={7} open onClose={vi.fn()} />,
+    );
+
+    const selector = await screen.findByTestId("deploy-operation") as HTMLSelectElement;
+    expect(selector.value).toBe("restart");
+    expect(
+      Array.from(selector.options).map((o) => o.textContent),
+    ).toEqual(["重启", "仅上传", "仅停止", "仅启动"]);
+  });
+
+  it("仅上传：payload 携带 operation=upload，后端只跑上传阶段（无停止/启动输出）", async () => {
+    invokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+      if (command === "list_deployment_targets") return targets;
+      if (command === "list_servers") return servers;
+      if (command === "list_build_artifacts") return artifacts;
+      if (command === "start_deploy") {
+        const id = (args.assignments as Assignment[])[0].targetId;
+        push(id, { type: "phase", target_id: id, phase: "upload", status: "running" });
+        push(id, { type: "upload_progress", target_id: id, transferred: 10, total: 10 });
+        push(id, { type: "output", target_id: id, phase: "upload", output: "uploaded 10 bytes", exit_code: 0 });
+        push(id, {
+          type: "target_finished",
+          target_id: id,
+          status: "success",
+          stop_failed: false,
+          error: null,
+        });
+        push(0, { type: "finished", cancelled: false });
+        return { cancelled: false, targets: [] };
+      }
+      return null;
+    });
+
+    render(
+      <DeployDialog projectId={5} projectName="演示项目" historyId={7} open onClose={vi.fn()} />,
+    );
+    await userEvent.click(await screen.findByTestId("deploy-target-1"));
+    await userEvent.selectOptions(screen.getByTestId("deploy-operation"), "upload");
+    await userEvent.click(screen.getByTestId("deploy-submit"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("deploy-status-1")).toHaveTextContent("部署成功"),
+    );
+    const call = invokeMock.mock.calls.find(([cmd]) => cmd === "start_deploy");
+    expect(call?.[1].operation).toBe("upload");
+    // 上传快照可见；停止/启动阶段从未执行。
+    expect(screen.getByTestId("deploy-output-1-upload")).toHaveTextContent("uploaded 10 bytes");
+    expect(screen.queryByTestId("deploy-output-1-stop")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("deploy-output-1-start")).not.toBeInTheDocument();
+  });
+
+  it("仅停止：上传计划只读（行禁用），payload 只带目标不带文件行", async () => {
+    invokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+      if (command === "list_deployment_targets") return targets;
+      if (command === "list_servers") return servers;
+      if (command === "list_build_artifacts") return artifacts;
+      if (command === "start_deploy") {
+        const id = (args.assignments as Assignment[])[0].targetId;
+        push(id, { type: "phase", target_id: id, phase: "stop", status: "running" });
+        push(id, { type: "output", target_id: id, phase: "stop", output: "stopped ok", exit_code: 0 });
+        push(id, {
+          type: "target_finished",
+          target_id: id,
+          status: "success",
+          stop_failed: false,
+          error: null,
+        });
+        push(0, { type: "finished", cancelled: false });
+        return { cancelled: false, targets: [] };
+      }
+      return null;
+    });
+
+    render(
+      <DeployDialog projectId={5} projectName="演示项目" historyId={7} open onClose={vi.fn()} />,
+    );
+    await userEvent.click(await screen.findByTestId("deploy-target-1"));
+    await userEvent.selectOptions(screen.getByTestId("deploy-operation"), "stop");
+
+    // 上传计划区只读：行勾选与空名行补选均禁用（不参与本次操作）。
+    expect(screen.getByTestId("deploy-row-check-1-101")).toBeDisabled();
+    expect(screen.getByTestId("deploy-row-check-1-102")).toBeDisabled();
+
+    await userEvent.click(screen.getByTestId("deploy-submit"));
+    await waitFor(() =>
+      expect(screen.getByTestId("deploy-status-1")).toHaveTextContent("部署成功"),
+    );
+
+    const call = invokeMock.mock.calls.find(([cmd]) => cmd === "start_deploy");
+    expect(call?.[1].operation).toBe("stop");
+    expect(call?.[1].assignments).toEqual([{ targetId: 1, files: [] }]);
+    // 停止输出可见；无上传阶段产物。
+    expect(screen.getByTestId("deploy-output-1-stop")).toHaveTextContent("stopped ok");
+    expect(screen.queryByTestId("deploy-output-1-upload")).not.toBeInTheDocument();
+  });
+
+  it("仅停止/仅启动无需可上传行也能发起（重启时同一状态按钮禁用）", async () => {
+    render(
+      <DeployDialog projectId={5} projectName="演示项目" historyId={7} open onClose={vi.fn()} />,
+    );
+    await userEvent.click(await screen.findByTestId("deploy-target-1"));
+
+    // 重启：取消所有可上传行后无法发起。
+    await userEvent.click(screen.getByTestId("deploy-row-check-1-101"));
+    await userEvent.click(screen.getByTestId("deploy-row-check-1-102"));
+    expect(screen.getByTestId("deploy-submit")).toBeDisabled();
+
+    // 仅停止：命令组操作不依赖上传计划，仍可发起。
+    await userEvent.selectOptions(screen.getByTestId("deploy-operation"), "stop");
+    expect(screen.getByTestId("deploy-submit")).toBeEnabled();
+
+    // 仅启动同理。
+    await userEvent.selectOptions(screen.getByTestId("deploy-operation"), "start");
+    expect(screen.getByTestId("deploy-submit")).toBeEnabled();
   });
 });

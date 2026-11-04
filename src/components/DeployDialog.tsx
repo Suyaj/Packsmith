@@ -1,7 +1,9 @@
-// 部署对话框（ticket 10 / 19）：确认解析后的上传计划——每个部署目标逐行展示
-// 其 文件名→目录 映射行（可勾选；产物缺失的行禁用+标红警告；空文件名行
-// 内联补选），上传集合 = 勾选集合。依次部署；展示各目标阶段状态、跳过提示
-// 与输出快照；停止失败中止重启并提供"单独执行启动命令组"；部署进行中可取消。
+// 部署对话框（ticket 10 / 19 / 23）：确认解析后的上传计划——每个部署目标
+// 逐行展示其 文件名→目录 映射行（可勾选；产物缺失的行禁用+标红警告；空文件名行
+// 内联补选），上传集合 = 勾选集合。对话框级操作选择（重启/仅上传/仅停止/
+// 仅启动，票 23）：仅停止/仅启动时上传计划区只读展示、payload 只带目标；
+// 依次部署；展示各目标阶段状态、跳过提示与输出快照；重启时停止失败中止重启
+// 并提供"单独执行启动命令组"；部署进行中可取消。
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -13,6 +15,7 @@ import {
   runStartGroup,
   startDeploy,
   type AutoDeployMessage,
+  type DeployOperation,
   type DeployPhase,
   type RowAssignment,
   type TargetAssignment,
@@ -92,6 +95,8 @@ function DeployDialog({
     new Map(),
   );
   const [views, setViews] = useState<Map<number, TargetView>>(new Map());
+  // 本次操作（票 23，对话框级）：重启（默认）/ 仅上传 / 仅停止 / 仅启动。
+  const [operation, setOperation] = useState<DeployOperation>("restart");
   const [running, setRunning] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
@@ -127,6 +132,7 @@ function DeployDialog({
       }
       setRowState(plan);
       setSelectedIds([]);
+      setOperation("restart");
       setViews(new Map(targetList.map((target) => [target.id, { ...INITIAL_VIEW, outputs: {}, notices: [] }])));
       setLoadError(null);
     } catch (e) {
@@ -217,32 +223,45 @@ function DeployDialog({
     return (rowState.get(row.id)?.pick ?? "").trim() !== "";
   };
 
+  /** 本次操作是否传文件（重启/仅上传）：仅停止/仅启动只执行命令组（票 23）。 */
+  const uploadsFiles = operation === "restart" || operation === "upload";
+
   const handleStart = async () => {
     if (artifacts === null) return;
     const names = artifacts.map((a) => a.file_name);
-    // 上传集合 = 勾选集合：只提交选中目标里勾选且可解析的行（ticket 19）。
-    const assignments: TargetAssignment[] = (targets ?? [])
-      .filter((target) => selectedIds.includes(target.id))
-      .map((target) => ({
-        targetId: target.id,
-        files: target.files
-          .filter((row) => rowState.get(row.id)?.checked && rowUploadable(row, names))
-          .map(
-            (row): RowAssignment => ({
-              rowId: row.id,
-              // 具名行以后端库内文件名为准；空名行带补选结果。
-              fileName: row.fileName.trim() === "" ? (rowState.get(row.id)?.pick ?? "").trim() : "",
-            }),
-          ),
-      }))
-      .filter((a) => a.files.length > 0);
-    if (assignments.length === 0) return;
+    let assignments: TargetAssignment[];
+    if (uploadsFiles) {
+      // 上传集合 = 勾选集合：只提交选中目标里勾选且可解析的行（ticket 19）。
+      assignments = (targets ?? [])
+        .filter((target) => selectedIds.includes(target.id))
+        .map((target) => ({
+          targetId: target.id,
+          files: target.files
+            .filter((row) => rowState.get(row.id)?.checked && rowUploadable(row, names))
+            .map(
+              (row): RowAssignment => ({
+                rowId: row.id,
+                // 具名行以后端库内文件名为准；空名行带补选结果。
+                fileName:
+                  row.fileName.trim() === "" ? (rowState.get(row.id)?.pick ?? "").trim() : "",
+              }),
+            ),
+        }))
+        .filter((a) => a.files.length > 0);
+      if (assignments.length === 0) return;
+    } else {
+      // 仅停止/仅启动（票 23）：不传文件，payload 只带选中的目标。
+      assignments = (targets ?? [])
+        .filter((target) => selectedIds.includes(target.id))
+        .map((target): TargetAssignment => ({ targetId: target.id, files: [] }));
+      if (assignments.length === 0) return;
+    }
     setStartError(null);
     setRunning(true);
     const channel = new Channel<AutoDeployMessage>();
     channel.onmessage = handleMessage;
     try {
-      await startDeploy(historyId, assignments, channel);
+      await startDeploy(historyId, operation, assignments, channel);
     } catch (e) {
       setStartError(startErrorMessage(e, t));
     } finally {
@@ -305,7 +324,28 @@ function DeployDialog({
         )}
 
         <fieldset>
+          <legend className="text-sm font-medium">{t("deploy.operationLabel")}</legend>
+          <select
+            data-testid="deploy-operation"
+            value={operation}
+            disabled={running}
+            aria-label={t("deploy.operationLabel")}
+            className="mt-1 rounded-md border bg-background px-2 py-1 text-sm"
+            onChange={(e) => setOperation(e.target.value as DeployOperation)}
+          >
+            {(["restart", "upload", "stop", "start"] as DeployOperation[]).map((op) => (
+              <option key={op} value={op}>
+                {t(`deploy.operations.${op}`)}
+              </option>
+            ))}
+          </select>
+        </fieldset>
+
+        <fieldset>
           <legend className="text-sm font-medium">{t("deploy.targetTitle")}</legend>
+          {!uploadsFiles && (
+            <p className="text-xs text-muted-foreground">{t("deploy.planReadonlyHint")}</p>
+          )}
           {targets !== null && targets.length === 0 && (
             <p className="text-sm text-muted-foreground">{t("deploy.noTargets")}</p>
           )}
@@ -356,7 +396,7 @@ function DeployDialog({
                                   type="checkbox"
                                   data-testid={`deploy-row-check-${target.id}-${row.id}`}
                                   checked={checked}
-                                  disabled={running || missing}
+                                  disabled={running || missing || !uploadsFiles}
                                   onChange={() =>
                                     setRowState((prev) => {
                                       const next = new Map(prev);
@@ -384,7 +424,7 @@ function DeployDialog({
                                   aria-label={t("deploy.plan.pickLabel")}
                                   data-testid={`deploy-row-select-${target.id}-${row.id}`}
                                   value={rowState.get(row.id)?.pick ?? ""}
-                                  disabled={running}
+                                  disabled={running || !uploadsFiles}
                                   className="ml-2 rounded-md border bg-background px-1 py-0.5 text-xs"
                                   onChange={(e) =>
                                     setRowState((prev) => {
@@ -428,9 +468,8 @@ function DeployDialog({
             disabled={
               running ||
               artifacts === null ||
-              artifacts.length === 0 ||
               selectedIds.length === 0 ||
-              !hasUploadableRows
+              (uploadsFiles && (artifacts.length === 0 || !hasUploadableRows))
             }
           >
             {t("deploy.submit")}
