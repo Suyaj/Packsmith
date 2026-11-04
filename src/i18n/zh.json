@@ -298,7 +298,7 @@
       "description": "私服依赖：粘贴或编辑 Maven settings.xml 内容，保存后构建时自动追加 -s 参数（用户命令已手写 -s 时不重复追加）；全局一份。",
       "label": "settings.xml 内容",
       "save": "保存",
-      "saved": "已保存",
+      "saved": "已保存（已自动放行 HTTP 私服仓库）",
       "clear": "清空",
       "set": "已设置",
       "unset": "未设置",
