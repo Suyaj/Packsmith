@@ -113,6 +113,7 @@
       "buildCancelled": "打包已取消",
       "viewLog": "查看完整日志",
       "logTitle": "构建日志",
+      "commitsTitle": "最新提交",
       "artifactAutoSelected": "已自动选中构件：{{name}}",
       "artifactPickerTitle": "构件选择",
       "searchArtifacts": "搜索构件…",

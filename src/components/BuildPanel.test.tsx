@@ -499,6 +499,123 @@ describe("打包面板（构建执行）", () => {
   });
 });
 
+// 最新提交（票 22）：克隆完成后经事件流推送所选分支最新 3 条提交，构建
+// 结束后列表保持可见，再次打包时刷新。
+describe("打包面板（最新提交）", () => {
+  const commitsEvent = {
+    type: "commits" as const,
+    commits: [
+      { sha: "cafeb01", author: "卡罗尔", time: 1730600000, message: "feature: 流式导出" },
+      { sha: "cafeb02", author: "bob", time: 1730599000, message: "fix: 修复空指针" },
+      { sha: "cafeb03", author: "alice", time: 1730598000, message: "add tests" },
+    ],
+  };
+
+  /** 手动结算的 promise（模拟一次真实打包的生命周期）。 */
+  function deferredStart() {
+    let resolve!: (v: unknown) => void;
+    const promise = new Promise((res) => {
+      resolve = res;
+    });
+    return { promise, resolve };
+  }
+
+  /** 发起打包并捕获事件通道（start_build 挂起，返回手动结算函数）。 */
+  async function startBuildCapturingChannel() {
+    const pending = deferredStart();
+    let captured: { onmessage?: (msg: unknown) => void } = {};
+    await openPanelWithBranches({
+      start_build: () => pending.promise,
+    });
+    vi.mocked(Channel).mockImplementation(function (this: unknown) {
+      const ch: { onmessage?: (msg: unknown) => void } = {};
+      captured = ch;
+      return ch as never;
+    });
+    await userEvent.click(screen.getByRole("button", { name: "开始打包" }));
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("start_build", expect.anything());
+    });
+    return { captured, resolveBuild: pending.resolve };
+  }
+
+  it("克隆完成后展示最新 3 条提交（短 SHA/作者/说明首行），构建结束后仍可见", async () => {
+    const { captured, resolveBuild } = await startBuildCapturingChannel();
+
+    captured.onmessage?.({ type: "clone", stage: "done" });
+    captured.onmessage?.(commitsEvent);
+    captured.onmessage?.({ type: "log", line: "[INFO] Scanning for projects..." });
+
+    expect(await screen.findByTestId("build-commits")).toBeInTheDocument();
+    expect(screen.getByText("最新提交")).toBeInTheDocument();
+    expect(screen.getByText("cafeb01")).toBeInTheDocument();
+    expect(screen.getByText("卡罗尔")).toBeInTheDocument();
+    expect(screen.getByText("feature: 流式导出")).toBeInTheDocument();
+    expect(screen.getByText("cafeb03")).toBeInTheDocument();
+    expect(screen.getByText("add tests")).toBeInTheDocument();
+    // 截断由样式处理：说明首行元素带 truncate 类。
+    expect(screen.getByText("feature: 流式导出")).toHaveClass("truncate");
+
+    // 构建结束后提交列表保持可见（紧挨构建结果区）。
+    resolveBuild(outcomeOk);
+    expect(await screen.findByText("构建成功")).toBeInTheDocument();
+    expect(screen.getByTestId("build-commits")).toBeInTheDocument();
+    expect(screen.getByText("cafeb01")).toBeInTheDocument();
+  });
+
+  it("再次打包后提交列表随新事件刷新", async () => {
+    let captured: { onmessage?: (msg: unknown) => void } = {};
+    await openPanelWithBranches({ start_build: () => outcomeOk });
+    vi.mocked(Channel).mockImplementation(function (this: unknown) {
+      const ch: { onmessage?: (msg: unknown) => void } = {};
+      captured = ch;
+      return ch as never;
+    });
+
+    // 第一次打包：main 的提交（构建结束后列表可见）。
+    await userEvent.click(screen.getByRole("button", { name: "开始打包" }));
+    captured.onmessage?.(commitsEvent);
+    await screen.findByText("构建成功");
+    expect(screen.getByText("cafeb01")).toBeInTheDocument();
+
+    // 第二次打包：换分支后新提交列表替换旧列表。
+    const second = deferredStart();
+    mockBackend({
+      list_remote_branches: () => ["main", "develop"],
+      start_build: () => second.promise,
+    });
+    vi.mocked(Channel).mockImplementation(function (this: unknown) {
+      const ch: { onmessage?: (msg: unknown) => void } = {};
+      captured = ch;
+      return ch as never;
+    });
+    await userEvent.click(screen.getByRole("button", { name: "开始打包" }));
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("start_build", expect.anything());
+    });
+    captured.onmessage?.({
+      type: "commits",
+      commits: [
+        { sha: "dead001", author: "dave", time: 1730700000, message: "release: v2" },
+        { sha: "dead002", author: "erin", time: 1730690000, message: "chore: bump" },
+        { sha: "dead003", author: "fred", time: 1730680000, message: "docs" },
+      ],
+    });
+
+    expect(await screen.findByText("dead001")).toBeInTheDocument();
+    expect(screen.queryByText("cafeb01")).not.toBeInTheDocument();
+  });
+
+  it("后端未推送提交事件时（读取失败静默）不渲染提交列表", async () => {
+    await openPanelWithBranches({ start_build: () => outcomeOk });
+
+    await userEvent.click(screen.getByRole("button", { name: "开始打包" }));
+    expect(await screen.findByText("构建成功")).toBeInTheDocument();
+
+    expect(screen.queryByText("最新提交")).not.toBeInTheDocument();
+  });
+});
+
 // 部署入口（bug 回归）：构建成功后点击「部署」按钮必须渲染 DeployDialog。
 describe("打包面板（部署入口）", () => {
   const deployServers = [
