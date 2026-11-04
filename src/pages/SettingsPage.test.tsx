@@ -564,7 +564,10 @@ describe("设置页：mvnd settings.xml（票 18）", () => {
         content: "<settings/>",
       });
     });
-    expect(await within(card()).findByText("已保存")).toBeInTheDocument();
+    // 票 20：保存成功提示注明已自动放行 HTTP 私服仓库
+    expect(
+      await within(card()).findByText("已保存（已自动放行 HTTP 私服仓库）"),
+    ).toBeInTheDocument();
     expect(await within(card()).findByText("已设置")).toBeInTheDocument();
     // 设置后出现清空按钮
     expect(
