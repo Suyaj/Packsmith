@@ -12,9 +12,11 @@
 
 **Blocked by:** None（基于集成 tip）
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] 三种内容形态（有 mirrors / 无 mirrors / 用户已自定义 blocker id）物化结果正确，有单测覆盖
-- [ ] DB 存用户原文；物化文件含注入块；清空后文件移除（既有行为不回退）
-- [ ] 前端：保存成功提示可注明"已自动放行 HTTP 私服仓库"（i18n），不做更多 UI
-- [ ] 全套测试绿（cargo 0 警告 / npm / build）
+> 实现：`set_mvnd_settings_xml` 物化前经 `inject_http_blocker_override`（字符串级三分支：已含同名 id 原样 / 有 `<mirrors>` 开标签后插入 / 无则 `</settings>` 前包裹插入，兜底追加文末；幂等）；DB 存用户原文，物化文件含注入块；前端保存成功提示注明「已自动放行 HTTP 私服仓库」（zh i18n）。
+
+- [x] 三种内容形态（有 mirrors / 无 mirrors / 用户已自定义 blocker id）物化结果正确，有单测覆盖
+- [x] DB 存用户原文；物化文件含注入块；清空后文件移除（既有行为不回退）
+- [x] 前端：保存成功提示可注明"已自动放行 HTTP 私服仓库"（i18n），不做更多 UI
+- [x] 全套测试绿（cargo 0 警告 / npm / build）
