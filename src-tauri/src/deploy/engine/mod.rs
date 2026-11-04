@@ -1,16 +1,20 @@
-//! 部署执行编排 (deploy orchestration, ticket 10).
+//! 部署执行编排 (deploy orchestration, ticket 10 / 23).
 //!
-//! For each 部署目标 (deployment target) in plan order:
-//! 1. **上传** — SFTP each of the target's resolved 文件名→目录 mapping rows
-//!    (ticket 19) from the 产物库 to the row's own upload dir under its
-//!    **original file name** (overwrite).
-//! 2. **停止** — run the 停止命令组 as one serial shell unit.
-//! 3. 停止成功 → **启动** — run the 启动命令组 the same way.
+//! The plan carries a [`DeployOperation`] (ticket 23, 对话框级): 重启 (default)
+//! = upload + stop + start; 仅上传 = upload only; 仅停止/仅启动 = the single
+//! command group only. For each 部署目标 (deployment target) in plan order:
+//! 1. **上传** (重启/仅上传) — SFTP each of the target's resolved 文件名→目录
+//!    mapping rows (ticket 19) from the 产物库 to the row's own upload dir
+//!    under its **original file name** (overwrite).
+//! 2. **停止** (重启/仅停止) — run the 停止命令组 as one serial shell unit.
+//! 3. 停止成功 → **启动** (重启/仅启动) — run the 启动命令组 the same way.
 //!
 //! A failed stop group aborts the restart (GLOSSARY: 重启): the start group
 //! never runs, the stop-phase output/error is surfaced via
 //! [`DeployEvent::Output`] / [`DeployEvent::TargetFinished`] with
 //! `stop_failed = true`, and the user may later run the start group alone.
+//! For 仅停止 a failed stop is just the operation's failure — no restart was
+//! withheld, so `stop_failed` stays `false`.
 //!
 //! The SSH/SFTP work happens behind the [`DeployTransport`] seam so the whole
 //! orchestration is testable hermetically; the real russh implementation is
@@ -20,7 +24,7 @@ use std::future::Future;
 use std::path::Path;
 
 use async_trait::async_trait;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::store::projects::CancelFlag;
 use crate::targets::repo::split_command_group as split_command_group_stored;
@@ -132,12 +136,52 @@ pub struct ArtifactRef {
     pub upload_dir: String,
 }
 
-/// What [`run_deploy`] should do. Targets with an empty [`TargetJob::artifacts`]
-/// list skip the upload; `run_stop: false` with no artifacts anywhere is
-/// the "单独执行启动命令组" (start-group-only) operation.
+/// 本次部署的操作（ticket 23）：对话框级选择，对计划里的所有目标统一生效，
+/// 逐目标只执行所选操作涉及的阶段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeployOperation {
+    /// 重启（默认）= 上传 + 停止 + 启动，与拆分前的完整部署一致。
+    Restart,
+    /// 仅上传：只按映射行传文件，不执行任何命令组。
+    Upload,
+    /// 仅停止：只执行停止命令组，不传文件。
+    Stop,
+    /// 仅启动：只执行启动命令组，不传文件（单独执行启动命令组同此操作）。
+    Start,
+}
+
+impl DeployOperation {
+    pub fn runs_upload(&self) -> bool {
+        matches!(self, DeployOperation::Restart | DeployOperation::Upload)
+    }
+
+    pub fn runs_stop(&self) -> bool {
+        matches!(self, DeployOperation::Restart | DeployOperation::Stop)
+    }
+
+    pub fn runs_start(&self) -> bool {
+        matches!(self, DeployOperation::Restart | DeployOperation::Start)
+    }
+
+    /// 部署记录里落库的操作标记（`deploy_records.operation`）；旧记录由列
+    /// 默认值读作 `"restart"`。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DeployOperation::Restart => "restart",
+            DeployOperation::Upload => "upload",
+            DeployOperation::Stop => "stop",
+            DeployOperation::Start => "start",
+        }
+    }
+}
+
+/// What [`run_deploy`] should do. The operation picks which phases run per
+/// target (ticket 23); a target with an empty [`TargetJob::artifacts`] list
+/// still skips the upload itself.
 #[derive(Debug, Clone)]
 pub struct DeployPlan {
-    pub run_stop: bool,
+    pub operation: DeployOperation,
     pub targets: Vec<TargetJob>,
 }
 
@@ -331,8 +375,9 @@ where
 
         // Phase 1: upload each of this target's mapping rows (original file
         // name, overwrite, into the row's own dir). Rows are resolved by the
-        // command layer — an empty `artifacts` list skips the upload entirely.
-        if !job.artifacts.is_empty() {
+        // command layer — an empty `artifacts` list skips the upload entirely;
+        // 仅上传/重启才上传（ticket 23），仅停止/仅启动不传文件。
+        if plan.operation.runs_upload() && !job.artifacts.is_empty() {
             sink(DeployEvent::Phase {
                 target_id: job.target_id,
                 phase: "upload",
@@ -400,8 +445,10 @@ where
             });
         }
 
-        // Phase 2: stop group. 停止失败则中止重启 — never run the start group.
-        if plan.run_stop {
+        // Phase 2: stop group. 重启时停止失败则中止重启 — never run the start
+        // group. 仅停止（ticket 23）的失败只是本次操作的失败：没有启动阶段
+        // 可中止，不设置 `stop_failed`（前端不展示重启恢复入口）。
+        if plan.operation.runs_stop() {
             if let Some(script) = join_group(&job.stop_commands) {
                 outcome.status = TargetStatus::Stopping;
                 sink(DeployEvent::Phase {
@@ -421,7 +468,8 @@ where
                         outcome.stop = Some(out);
                         if failed {
                             outcome.status = TargetStatus::Failed;
-                            outcome.stop_failed = true;
+                            // 仅"还会接着启动"的操作（重启）才谈得上中止重启。
+                            outcome.stop_failed = plan.operation.runs_start();
                             outcome.error = Some("stop command group failed".into());
                             finish(&mut sink, &outcome);
                             outcomes.push(outcome);
@@ -430,7 +478,7 @@ where
                     }
                     Err(e) => {
                         outcome.status = TargetStatus::Failed;
-                        outcome.stop_failed = true;
+                        outcome.stop_failed = plan.operation.runs_start();
                         outcome.error = Some(e.to_string());
                         finish(&mut sink, &outcome);
                         outcomes.push(outcome);
@@ -440,38 +488,41 @@ where
             }
         }
 
-        // Phase 3: start group (only reached when the stop group succeeded).
-        if let Some(script) = join_group(&job.start_commands) {
-            outcome.status = TargetStatus::Starting;
-            sink(DeployEvent::Phase {
-                target_id: job.target_id,
-                phase: "start",
-                status: "running",
-            });
-            match transport.exec(&script).await {
-                Ok(out) => {
-                    let failed = out.exit_code != 0;
-                    sink(DeployEvent::Output {
-                        target_id: job.target_id,
-                        phase: "start",
-                        output: out.combined.clone(),
-                        exit_code: out.exit_code,
-                    });
-                    outcome.start = Some(out);
-                    if failed {
+        // Phase 3: start group (restart: only reached when the stop group
+        // succeeded; 仅启动 runs it straight away — ticket 23).
+        if plan.operation.runs_start() {
+            if let Some(script) = join_group(&job.start_commands) {
+                outcome.status = TargetStatus::Starting;
+                sink(DeployEvent::Phase {
+                    target_id: job.target_id,
+                    phase: "start",
+                    status: "running",
+                });
+                match transport.exec(&script).await {
+                    Ok(out) => {
+                        let failed = out.exit_code != 0;
+                        sink(DeployEvent::Output {
+                            target_id: job.target_id,
+                            phase: "start",
+                            output: out.combined.clone(),
+                            exit_code: out.exit_code,
+                        });
+                        outcome.start = Some(out);
+                        if failed {
+                            outcome.status = TargetStatus::Failed;
+                            outcome.error = Some("start command group failed".into());
+                            finish(&mut sink, &outcome);
+                            outcomes.push(outcome);
+                            continue;
+                        }
+                    }
+                    Err(e) => {
                         outcome.status = TargetStatus::Failed;
-                        outcome.error = Some("start command group failed".into());
+                        outcome.error = Some(e.to_string());
                         finish(&mut sink, &outcome);
                         outcomes.push(outcome);
                         continue;
                     }
-                }
-                Err(e) => {
-                    outcome.status = TargetStatus::Failed;
-                    outcome.error = Some(e.to_string());
-                    finish(&mut sink, &outcome);
-                    outcomes.push(outcome);
-                    continue;
                 }
             }
         }
