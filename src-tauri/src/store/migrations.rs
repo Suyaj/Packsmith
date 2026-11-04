@@ -139,6 +139,24 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         INSERT INTO deployment_target_files (target_id, file_name, upload_dir, position)
             SELECT id, '', upload_dir, 0 FROM deployment_targets;",
     },
+    // ticket 21: 默认构件多选列表——项目级有序子表。`projects.default_artifact`
+    // 单值列保留但废弃（不再读写业务数据，仅避免破坏性迁移）：补选/自动连锁
+    // 按本表顺序取用。旧数据迁移：非空单值回填为单元素列表（空白不回填）。
+    Migration {
+        version: 13,
+        name: "ticket 21: project_default_artifacts (项目默认构件列表, 有序, FK 级联)",
+        sql: "CREATE TABLE project_default_artifacts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            file_name TEXT NOT NULL,
+            position INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX idx_project_default_artifacts_project
+            ON project_default_artifacts(project_id, position);
+        INSERT INTO project_default_artifacts (project_id, file_name, position)
+            SELECT id, default_artifact, 0 FROM projects
+            WHERE default_artifact IS NOT NULL AND trim(default_artifact) != '';",
+    },
 ];
 
 pub(crate) const LATEST_SCHEMA_VERSION: i32 = MIGRATIONS[MIGRATIONS.len() - 1].version;

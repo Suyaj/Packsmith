@@ -189,14 +189,42 @@ describe("DeployDialog", () => {
     ]);
   });
 
-  it("空名行内联补选：默认预选首个产物，改动随 payload 提交", async () => {
+  // 票 21：空名行预选按项目默认构件列表**依序**取第一个可用项；
+  // 列表用尽（全部缺失）回退首个可用产物。
+  it("空名行预选默认构件列表中第一个可用项，列表用尽回退首个产物", async () => {
     render(
-      <DeployDialog projectId={5} projectName="演示项目" historyId={7} open onClose={vi.fn()} />,
+      <DeployDialog
+        projectId={5}
+        projectName="演示项目"
+        historyId={7}
+        open
+        onClose={vi.fn()}
+        defaultArtifacts={["missing.jar", "other-1.0.jar", "app-1.0.jar"]}
+      />,
     );
 
     await userEvent.click(await screen.findByTestId("deploy-target-1"));
 
-    // 空名行显示「（未指定文件）」+ 内联选择器，默认预选首个产物。
+    // 列表首项缺失跳过，取第一个可用项 other-1.0.jar（而非首个产物 app）。
+    const pick = screen.getByTestId("deploy-row-select-1-102") as HTMLSelectElement;
+    expect(pick.value).toBe("other-1.0.jar");
+  });
+
+  it("空名行内联补选：默认预选首个产物，改动随 payload 提交", async () => {
+    render(
+      <DeployDialog
+        projectId={5}
+        projectName="演示项目"
+        historyId={7}
+        open
+        onClose={vi.fn()}
+        defaultArtifacts={["missing.jar", "also-missing.jar"]}
+      />,
+    );
+
+    await userEvent.click(await screen.findByTestId("deploy-target-1"));
+
+    // 列表用尽（全部缺失）：回退首个可用产物。
     expect(screen.getByTestId("deploy-plan-1")).toHaveTextContent("（未指定文件）");
     const pick = screen.getByTestId("deploy-row-select-1-102") as HTMLSelectElement;
     expect(pick.value).toBe("app-1.0.jar");

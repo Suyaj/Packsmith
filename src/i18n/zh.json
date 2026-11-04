@@ -115,6 +115,9 @@
       "logTitle": "构建日志",
       "artifactAutoSelected": "已自动选中构件：{{name}}",
       "artifactPickerTitle": "构件选择",
+      "searchArtifacts": "搜索构件…",
+      "noMatchingArtifacts": "没有匹配的构件",
+      "selectArtifacts": "请选择构件",
       "saveDefaultArtifact": "保存默认构件",
       "defaultArtifactSaved": "默认构件已保存"
     },
@@ -124,6 +127,7 @@
       "duplicate_path": "已存在相同本地路径的项目",
       "path_not_found": "本地路径不存在或不是目录",
       "invalid_name": "项目名称不能为空且不能包含路径分隔符",
+      "invalid_artifact": "构件名不能为空",
       "directory_exists": "目标目录已存在，请更换项目名称或工作区",
       "invalid_type": "不支持的项目类型",
       "unsupported_project_type": "暂不支持创建该类型项目：v1 仅支持 Maven（Java）",

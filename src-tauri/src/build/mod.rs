@@ -471,9 +471,13 @@ pub async fn run_build_flow_in(
                             .map(|d| d.to_string_lossy().into_owned()),
                     },
                 )?;
-                // 单构件自动选中并记住为项目默认；多构件由用户在 UI 勾选。
+                // 单构件自动选中并记住为项目默认（单元素列表）；多构件由用户在 UI 勾选。
                 if artifacts.len() == 1 {
-                    projects::set_default_artifact(&store, project_id, &artifacts[0].file_name)?;
+                    projects::set_default_artifacts(
+                        &store,
+                        project_id,
+                        std::slice::from_ref(&artifacts[0].file_name),
+                    )?;
                 }
                 // 保留策略：每项目只留最近 N 次（设置页可配，默认 10）。
                 history::enforce_retention(&store, appdata, project_id)?;

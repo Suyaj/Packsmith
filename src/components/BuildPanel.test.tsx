@@ -266,70 +266,118 @@ describe("打包面板（构建命令编辑）", () => {
   });
 });
 
-describe("打包面板（构件选择）", () => {
-  it("单构件构建自动选中：展示构件名，不再弹出勾选", async () => {
+describe("打包面板（构件选择·搜索多选）", () => {
+  it("单构件构建自动选中：展示构件名，构件选择器同样可用", async () => {
     await openPanelWithBranches({ start_build: () => outcomeOk });
 
     await userEvent.click(screen.getByRole("button", { name: "开始打包" }));
 
     expect(await screen.findByText(/已自动选中构件/)).toBeInTheDocument();
-    expect(screen.queryByRole("radiogroup")).not.toBeInTheDocument();
+    // 票 21：单/多产物场景下选择器均可用（单构件已预选，后端已自动记住）。
+    expect(await screen.findByRole("combobox", { name: "构件选择" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("combobox", { name: "构件选择" }));
+    expect(await screen.findByRole("option", { name: /app-1\.0\.jar/ })).toBeInTheDocument();
     expect(mockInvoke).not.toHaveBeenCalledWith(
-      "set_default_artifact",
+      "set_default_artifacts",
       expect.anything(),
     );
   });
 
-  it("多构件构建弹出勾选：项目默认构件预选中，确认后保存为默认", async () => {
+  it("多构件构建：搜索关键字实时过滤构件列表，无匹配展示空状态", async () => {
+    await openPanelWithBranches({ start_build: () => outcomeOkMulti });
+
+    await userEvent.click(screen.getByRole("button", { name: "开始打包" }));
+    await userEvent.click(await screen.findByRole("combobox", { name: "构件选择" }));
+
+    const search = await screen.findByPlaceholderText("搜索构件…");
+    await userEvent.type(search, "web");
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "b-web-1.0.war",
+    ]);
+
+    await userEvent.clear(search);
+    await userEvent.type(search, "zzz");
+    expect(await screen.findByText("没有匹配的构件")).toBeInTheDocument();
+    expect(screen.queryByRole("option")).not.toBeInTheDocument();
+  });
+
+  it("多选构件并按勾选顺序保存为默认构件列表", async () => {
     await openPanelWithBranches({
       start_build: () => outcomeOkMulti,
-      set_default_artifact: (args) => {
-        expect(args).toMatchObject({ projectId: 7, artifact: "b-web-1.0.war" });
-        return { ...gitProject, default_artifact: "b-web-1.0.war" };
+      set_default_artifacts: (args) => {
+        expect(args).toMatchObject({
+          projectId: 7,
+          artifacts: ["b-web-1.0.war", "a-api-1.0.jar"],
+        });
+        return { ...gitProject, default_artifacts: ["b-web-1.0.war", "a-api-1.0.jar"] };
       },
     });
 
     await userEvent.click(screen.getByRole("button", { name: "开始打包" }));
+    const trigger = await screen.findByRole("combobox", { name: "构件选择" });
+    await userEvent.click(trigger);
 
-    const group = await screen.findByRole("radiogroup", { name: "构件选择" });
-    const a = screen.getByRole("radio", { name: /a-api-1\.0\.jar/ }) as HTMLInputElement;
-    const b = screen.getByRole("radio", { name: /b-web-1\.0\.war/ }) as HTMLInputElement;
-    expect(group).toBeInTheDocument();
-    // 无默认时预选第一个构件。
-    expect(a.checked).toBe(true);
-    expect(b.checked).toBe(false);
+    // 初始预选第一个构件：先取消，再按目标顺序勾选（先 b 后 a）。
+    await userEvent.click(await screen.findByRole("option", { name: /a-api-1\.0\.jar/ }));
+    await userEvent.click(screen.getByRole("option", { name: /b-web-1\.0\.war/ }));
+    expect(screen.getByRole("checkbox", { name: /b-web-1\.0\.war/ })).toBeChecked();
+    await userEvent.click(screen.getByRole("option", { name: /a-api-1\.0\.jar/ }));
+    expect(screen.getByRole("checkbox", { name: /a-api-1\.0\.jar/ })).toBeChecked();
 
-    await userEvent.click(b);
+    // 勾选不关闭下拉（可继续搜索/调整），Esc 收起后触发按钮回显已勾选集。
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    await userEvent.type(screen.getByPlaceholderText("搜索构件…"), "{Escape}");
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).toHaveTextContent("b-web-1.0.war");
+    expect(trigger).toHaveTextContent("a-api-1.0.jar");
+
     await userEvent.click(screen.getByRole("button", { name: "保存默认构件" }));
-
     await waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith("set_default_artifact", {
+      expect(mockInvoke).toHaveBeenCalledWith("set_default_artifacts", {
         projectId: 7,
-        artifact: "b-web-1.0.war",
+        artifacts: ["b-web-1.0.war", "a-api-1.0.jar"],
       });
     });
     expect(await screen.findByText("默认构件已保存")).toBeInTheDocument();
   });
 
-  it("项目已有默认构件时勾选默认预选中", async () => {
+  it("项目默认构件列表预选已保存的项；再次勾选可取消", async () => {
     await openPanelWithBranches(
       { start_build: () => outcomeOkMulti },
-      { ...gitProject, default_artifact: "b-web-1.0.war" },
+      { ...gitProject, default_artifacts: ["b-web-1.0.war"] },
     );
 
     await userEvent.click(screen.getByRole("button", { name: "开始打包" }));
+    await userEvent.click(await screen.findByRole("combobox", { name: "构件选择" }));
 
-    const b = (await screen.findByRole("radio", {
-      name: /b-web-1\.0\.war/,
-    })) as HTMLInputElement;
+    const b = screen.getByRole("checkbox", { name: /b-web-1\.0\.war/ }) as HTMLInputElement;
+    const a = screen.getByRole("checkbox", { name: /a-api-1\.0\.jar/ }) as HTMLInputElement;
     await waitFor(() => expect(b.checked).toBe(true));
+    expect(a.checked).toBe(false);
+
+    await userEvent.click(screen.getByRole("option", { name: /b-web-1\.0\.war/ }));
+    expect(screen.getByRole("checkbox", { name: /b-web-1\.0\.war/ })).not.toBeChecked();
+  });
+
+  it("无默认构件时预选第一个构件（单选行为与原来一致）", async () => {
+    await openPanelWithBranches({ start_build: () => outcomeOkMulti });
+
+    await userEvent.click(screen.getByRole("button", { name: "开始打包" }));
+    await userEvent.click(await screen.findByRole("combobox", { name: "构件选择" }));
+
+    expect(
+      (screen.getByRole("checkbox", { name: /a-api-1\.0\.jar/ }) as HTMLInputElement).checked,
+    ).toBe(true);
+    expect(
+      (screen.getByRole("checkbox", { name: /b-web-1\.0\.war/ }) as HTMLInputElement).checked,
+    ).toBe(false);
   });
 
   it("保存默认构件失败时展示后端错误", async () => {
     await openPanelWithBranches({
       start_build: () => outcomeOkMulti,
-      set_default_artifact: () => {
-        throw { code: "store", message: "store error" };
+      set_default_artifacts: () => {
+        throw { code: "invalid_artifact", message: "invalid artifact name" };
       },
     });
 

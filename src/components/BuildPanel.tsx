@@ -17,7 +17,7 @@ import {
   cancelBuildWorkspace,
   listRemoteBranches,
   readBuildLog,
-  setDefaultArtifact,
+  setDefaultArtifacts,
   startBuild,
   updateBuildCommand,
   type BuildEvent,
@@ -75,7 +75,9 @@ function BuildPanel({ project, onClose }: { project: Project; onClose: () => voi
   const [fullLog, setFullLog] = useState<string | null>(null);
   const [buildCommand, setBuildCommand] = useState(project.build_command);
   const [commandSaved, setCommandSaved] = useState(false);
-  const [selectedArtifact, setSelectedArtifact] = useState<string | null>(null);
+  const [selectedArtifacts, setSelectedArtifacts] = useState<string[]>([]);
+  const [artifactPickerOpen, setArtifactPickerOpen] = useState(false);
+  const [artifactQuery, setArtifactQuery] = useState("");
   const [defaultArtifactSaved, setDefaultArtifactSaved] = useState(false);
   const [deploying, setDeploying] = useState(false);
 
@@ -129,19 +131,19 @@ function BuildPanel({ project, onClose }: { project: Project; onClose: () => voi
     setLogLines([]);
     setCloneProgress(null);
     setDefaultArtifactSaved(false);
-    setSelectedArtifact(null);
+    setSelectedArtifacts([]);
     setBusy(true);
     try {
       const onEvent = new Channel<BuildEvent>();
       onEvent.onmessage = handleEvent;
       const result = await startBuild(project.id, branch, onEvent);
       setOutcome(result);
-      // 多构件时弹出勾选：默认构件预选中（单构件后端已自动选中并记住）。
-      if (result.artifacts.length > 1) {
-        const names = result.artifacts.map((a) => a.file_name);
-        const fallback = project.default_artifact;
-        setSelectedArtifact(fallback && names.includes(fallback) ? fallback : names[0]);
-      }
+      // 构件选择器（票 21）：预选项目默认构件列表中可用的项（依序保留在
+      // 列表中的项）；无默认时预选第一个构件（单选行为与原来一致；单构件
+      // 后端已自动选中并记住）。
+      const names = result.artifacts.map((a) => a.file_name);
+      const remembered = (project.default_artifacts ?? []).filter((n) => names.includes(n));
+      setSelectedArtifacts(remembered.length > 0 ? remembered : (names[0] ? [names[0]] : []));
     } catch (err) {
       const code = isBackendError(err) ? err.code : "unknown";
       const message = isBackendError(err) ? err.message : String(err);
@@ -165,13 +167,13 @@ function BuildPanel({ project, onClose }: { project: Project; onClose: () => voi
     }
   }
 
-  /** 多构件构建：把勾选结果保存为该项目默认构件。 */
+  /** 把勾选结果（按勾选顺序）保存为该项目默认构件列表（票 21）。 */
   async function handleSaveDefaultArtifact() {
-    if (!selectedArtifact) return;
+    if (selectedArtifacts.length === 0) return;
     setError(null);
     setDefaultArtifactSaved(false);
     try {
-      await setDefaultArtifact(project.id, selectedArtifact);
+      await setDefaultArtifacts(project.id, selectedArtifacts);
       setDefaultArtifactSaved(true);
     } catch (err) {
       const code = isBackendError(err) ? err.code : "unknown";
@@ -333,27 +335,91 @@ function BuildPanel({ project, onClose }: { project: Project; onClose: () => voi
             </div>
           )}
 
-          {outcome && outcome.success && outcome.artifacts.length > 1 && (
+          {outcome && outcome.success && outcome.artifacts.length > 0 && (
             <fieldset>
               <legend className="text-sm font-medium">
                 {t("projects.build.artifactPickerTitle")}
               </legend>
-              <div role="radiogroup" aria-label={t("projects.build.artifactPickerTitle")} className="mt-1 flex flex-col gap-1">
-                {outcome.artifacts.map((a) => (
-                  <label key={a.relative_path} className="flex items-center gap-2 text-sm">
-                    <input
-                      type="radio"
-                      name="default-artifact"
-                      value={a.file_name}
-                      checked={selectedArtifact === a.file_name}
-                      onChange={() => setSelectedArtifact(a.file_name)}
+              {/* 可搜索多选 Combobox（票 21）：过滤走前端模糊匹配（与分支
+                  选择器同款），勾选后下拉保持展开，可继续调整。 */}
+              <Popover
+                open={artifactPickerOpen}
+                onOpenChange={(open) => {
+                  setArtifactPickerOpen(open);
+                  if (!open) setArtifactQuery("");
+                }}
+              >
+                <PopoverTrigger asChild disabled={busy}>
+                  <Button
+                    variant="outline"
+                    role="combobox"
+                    aria-label={t("projects.build.artifactPickerTitle")}
+                    aria-expanded={artifactPickerOpen}
+                    className="mt-1 w-full justify-between font-normal"
+                  >
+                    <span className="truncate">
+                      {selectedArtifacts.length > 0
+                        ? selectedArtifacts.join("、")
+                        : t("projects.build.selectArtifacts")}
+                    </span>
+                    <ChevronsUpDownIcon className="size-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-(--radix-popover-trigger-width) p-0">
+                  <Command shouldFilter={false}>
+                    <CommandInput
+                      value={artifactQuery}
+                      onValueChange={setArtifactQuery}
+                      placeholder={t("projects.build.searchArtifacts")}
                     />
-                    {a.file_name}
-                  </label>
-                ))}
-              </div>
+                    <CommandList>
+                      {filterBranches(
+                        outcome.artifacts.map((a) => a.file_name),
+                        artifactQuery,
+                      ).map(({ branch: name, indices }) => {
+                        const checked = selectedArtifacts.includes(name);
+                        return (
+                          <CommandItem
+                            key={name}
+                            value={name}
+                            onSelect={() => {
+                              setSelectedArtifacts((prev) =>
+                                prev.includes(name)
+                                  ? prev.filter((n) => n !== name)
+                                  : [...prev, name],
+                              );
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              aria-label={name}
+                              checked={checked}
+                              onChange={() => {}}
+                              className="pointer-events-none"
+                            />
+                            <HighlightedBranch text={name} indices={indices} />
+                          </CommandItem>
+                        );
+                      })}
+                      {filterBranches(
+                        outcome.artifacts.map((a) => a.file_name),
+                        artifactQuery,
+                      ).length === 0 && (
+                        <div className="py-6 text-center text-sm text-muted-foreground">
+                          {t("projects.build.noMatchingArtifacts")}
+                        </div>
+                      )}
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
               <div className="mt-2 flex items-center gap-2">
-                <Button variant="outline" size="sm" onClick={handleSaveDefaultArtifact}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleSaveDefaultArtifact}
+                  disabled={busy || selectedArtifacts.length === 0}
+                >
                   {t("projects.build.saveDefaultArtifact")}
                 </Button>
                 {defaultArtifactSaved && (
@@ -425,7 +491,7 @@ function BuildPanel({ project, onClose }: { project: Project; onClose: () => voi
               historyId={outcome.history_id}
               open
               onClose={() => setDeploying(false)}
-              defaultArtifact={project.default_artifact ?? null}
+              defaultArtifacts={project.default_artifacts ?? []}
             />
           )}
         </div>
