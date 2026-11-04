@@ -48,9 +48,10 @@ describe("targetsApi", () => {
       startCommands: "",
       stopCommands: "",
       autoDeploy: true,
-    });
+    }, 5);
     expect(invokeMock).toHaveBeenCalledWith("update_deployment_target", {
       id: 1,
+      projectId: 5,
       serverId: 12,
       files: [{ fileName: "only.jar", uploadDir: "/srv/x" }],
       startCommands: "",
