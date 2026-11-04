@@ -76,6 +76,15 @@ function push(targetId: number, event: DeployEvent) {
   for (const ch of channels) ch.onmessage?.({ deployId: 1, event: { ...event, target_id: targetId } as DeployEvent });
 }
 
+// 模拟后端 Channel 的真实投递：Rust 端 `Channel::send` 序列化后的 JSON 原样
+// 到达 `onmessage`（不经任何包装）。用字面量 JSON 字符串锁线上的形状。
+function pushRaw(...payloads: string[]) {
+  for (const json of payloads) {
+    const message = JSON.parse(json);
+    for (const ch of channels) ch.onmessage?.(message);
+  }
+}
+
 function pushSuccess(id: number) {
   push(id, { type: "phase", target_id: id, phase: "upload", status: "running" });
   push(id, { type: "upload_progress", target_id: id, transferred: 10, total: 10 });
@@ -457,6 +466,47 @@ describe("DeployDialog", () => {
     await userEvent.click(screen.getByTestId("deploy-submit"));
     await waitFor(() =>
       expect(screen.getByTestId("deploy-progress-1")).toHaveTextContent("5/10"),
+    );
+  });
+
+  // 线上契约：后端 `start_deploy` / `run_start_group` 经 `tauri::ipc::Channel`
+  // 推送的是 `Channel<AutoDeployEvent>::send` 序列化后的原始 JSON——信封
+  // `{ deployId, event }`（camelCase）。事件本体不经任何再包装。若形状漂移
+  // （如裸事件或缺 deployId），状态机永远停在“等待”（用户症状：点部署后
+  // 目标一直 pending），取消也拿不到 id。golden 字符串与
+  // src-tauri/src/deploy/commands.rs 的 event_envelope_serializes_to_the_frontend_contract
+  // 互为镜像。
+  it("后端 Channel 消息按线上真实 JSON 形状驱动状态机离开等待，deployId 可用于取消", async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "list_deployment_targets") return targets;
+      if (command === "list_servers") return servers;
+      if (command === "list_build_artifacts") return artifacts;
+      if (command === "start_deploy") {
+        // Started 事件先到（带信封 deployId），部署保持进行中（invoke 挂起）。
+        pushRaw('{"deployId":7,"event":{"type":"started","target_ids":[1]}}');
+        return new Promise(() => {});
+      }
+      return null;
+    });
+
+    render(
+      <DeployDialog projectId={5} projectName="演示项目" historyId={7} open onClose={vi.fn()} />,
+    );
+    await userEvent.click(await screen.findByTestId("deploy-target-1"));
+    await userEvent.click(screen.getByTestId("deploy-submit"));
+
+    // 信封里的 deployId 驱动取消。
+    await userEvent.click(await screen.findByTestId("deploy-cancel"));
+    expect(invokeMock).toHaveBeenCalledWith("cancel_deploy", { deployId: 7 });
+
+    // 之后的事件按同一形状继续驱动状态机：等待 → 成功。
+    pushRaw(
+      '{"deployId":7,"event":{"type":"phase","target_id":1,"phase":"upload","status":"running"}}',
+      '{"deployId":7,"event":{"type":"target_finished","target_id":1,"status":"success","stop_failed":false,"error":null}}',
+      '{"deployId":7,"event":{"type":"finished","cancelled":false}}',
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("deploy-status-1")).toHaveTextContent("部署成功"),
     );
   });
 });

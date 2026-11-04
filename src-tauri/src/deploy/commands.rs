@@ -75,12 +75,24 @@ impl DeployRegistry {
 }
 
 /// Auto-chain event envelope for the `deploy-event` app event: the deploy id
-/// plus the engine event itself.
+/// plus the engine event itself. Also the wire shape of the
+/// `tauri::ipc::Channel` messages for start_deploy / run_start_group — the
+/// frontend's `AutoDeployMessage` (`{ deployId, event }`, camelCase). The
+/// deploy id must travel with every message so the UI can cancel mid-deploy.
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AutoDeployEvent {
     pub deploy_id: i64,
-    #[serde(flatten)]
+    /// 嵌套在 `event` 键下（不 flatten）：前端按 `message.event.type` 分派。
     pub event: DeployEvent,
+}
+
+impl AutoDeployEvent {
+    /// Single wrapping point for every event leaving the backend (Channel +
+    /// app-event emitter) so the wire shape can't drift from the frontend.
+    pub fn envelope(deploy_id: i64, event: DeployEvent) -> Self {
+        AutoDeployEvent { deploy_id, event }
+    }
 }
 
 fn resolve_jobs(
@@ -258,7 +270,7 @@ pub async fn start_deploy(
     app: AppHandle,
     history_id: i64,
     assignments: Vec<TargetAssignment>,
-    on_event: tauri::ipc::Channel<DeployEvent>,
+    on_event: tauri::ipc::Channel<AutoDeployEvent>,
 ) -> Result<engine::DeploySummary, ApiError> {
     if assignments.is_empty() {
         return Err(ApiError::raw(
@@ -343,8 +355,9 @@ pub async fn start_deploy(
 
     let factory = |conn: ConnInfo| async move { SshTransport::connect(&conn).await };
     let mut sink = |event: DeployEvent| {
-        // Channel 关闭（前端已离开）不构成失败理由。
-        let _ = on_event.send(event);
+        // Channel 关闭（前端已离开）不构成失败理由。信封带上 deployId——
+        // 前端靠它取消进行中的部署。
+        let _ = on_event.send(AutoDeployEvent::envelope(deploy_id, event));
     };
     for (target_id, message) in notices {
         sink(DeployEvent::Skipped { target_id, message });
@@ -379,7 +392,7 @@ pub fn cancel_deploy(registry: State<'_, DeployRegistry>, deploy_id: i64) -> boo
 pub async fn run_start_group(
     app: AppHandle,
     target_id: i64,
-    on_event: tauri::ipc::Channel<DeployEvent>,
+    on_event: tauri::ipc::Channel<AutoDeployEvent>,
 ) -> Result<engine::DeploySummary, ApiError> {
     let store = (*app.state::<Store>()).clone();
     let target = targets_repo::get(&store, target_id)
@@ -392,7 +405,7 @@ pub async fn run_start_group(
 
     let factory = |conn: ConnInfo| async move { SshTransport::connect(&conn).await };
     let mut sink = |event: DeployEvent| {
-        let _ = on_event.send(event);
+        let _ = on_event.send(AutoDeployEvent::envelope(deploy_id, event));
     };
     let summary = engine::run_deploy(
         DeployPlan {
@@ -500,7 +513,7 @@ pub fn auto_chain_after_build(
     tauri::async_runtime::spawn(async move {
         let factory = |conn: ConnInfo| async move { SshTransport::connect(&conn).await };
         let sink = move |event: DeployEvent| {
-            let _ = emitter.emit("deploy-event", AutoDeployEvent { deploy_id, event });
+            let _ = emitter.emit("deploy-event", AutoDeployEvent::envelope(deploy_id, event));
         };
         for (target_id, message) in skipped_notices {
             sink(DeployEvent::Skipped { target_id, message });
@@ -518,6 +531,27 @@ pub fn auto_chain_after_build(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Channel / app-event 信封的线上形状（golden）：前端 `AutoDeployMessage`
+    /// = `{ deployId, event }`，`deployId` 必须 camelCase，事件本体嵌套在
+    /// `event` 键下。形状漂移 = 前端状态机永远停在"等待"。golden 字符串与
+    /// `src/components/DeployDialog.test.tsx` 的线上契约测试互为镜像。
+    #[test]
+    fn event_envelope_serializes_to_the_frontend_contract() {
+        let json = serde_json::to_string(&AutoDeployEvent::envelope(
+            7,
+            DeployEvent::Phase {
+                target_id: 1,
+                phase: "upload",
+                status: "running",
+            },
+        ))
+        .unwrap();
+        assert_eq!(
+            json,
+            r#"{"deployId":7,"event":{"type":"phase","target_id":1,"phase":"upload","status":"running"}}"#
+        );
+    }
 
     /// ticket 17/19 校验: only files actually in this build's artifact listing
     /// resolve; anything else (missing file, path traversal) is rejected with

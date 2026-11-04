@@ -27,6 +27,12 @@ use crate::server::ssh::{HostKeyCheck, check_host_key, fingerprint_of};
 /// phases and per upload chunk, not mid-exec.
 const OPERATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 
+/// russh 的 `client::connect` 没有默认超时：TCP 被静默拦截/丢包（或对端收下
+/// 连接却不回 SSH banner）时连接永远悬着——引擎在此之前不发任何事件，部署
+/// 目标就一直停在“等待”且没有任何反馈。给整个建立阶段（TCP + banner +
+/// KEX + 认证）一个上限，超时以 `Unreachable`（unreachable）上报。
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
 const SFTP_WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 const UPLOAD_CHUNK: usize = 32 * 1024;
 
@@ -87,6 +93,27 @@ impl SshTransport {
     /// Connects and authenticates with `conn`'s credential. Host-key errors
     /// surface as [`TransportError::HostKeyUnknown`] / [`HostKeyChanged`].
     pub async fn connect(conn: &super::engine::ConnInfo) -> Result<Self, TransportError> {
+        Self::connect_with_timeout(conn, CONNECT_TIMEOUT).await
+    }
+
+    /// [`Self::connect`] with an injectable ceiling — the black-hole test uses
+    /// a short one so CI stays bounded.
+    pub async fn connect_with_timeout(
+        conn: &super::engine::ConnInfo,
+        timeout: std::time::Duration,
+    ) -> Result<Self, TransportError> {
+        tokio::time::timeout(timeout, Self::establish(conn))
+            .await
+            .unwrap_or_else(|_| {
+                Err(TransportError::Unreachable {
+                    detail: format!("connection timed out after {}s", timeout.as_secs()),
+                })
+            })
+    }
+
+    /// The unbounded establish itself (TCP + banner + KEX + auth), factored
+    /// out so [`Self::connect_with_timeout`] can bound it.
+    async fn establish(conn: &super::engine::ConnInfo) -> Result<Self, TransportError> {
         // Validate key material before any network I/O.
         if let crate::server::repo::Credential::PrivateKey { path, passphrase } = &conn.credential {
             if let Err(e) = russh::keys::load_secret_key(path, passphrase.as_deref()) {
