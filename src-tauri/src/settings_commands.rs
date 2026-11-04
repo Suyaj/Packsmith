@@ -1,5 +1,5 @@
 //! 设置相关 Tauri commands（ticket 11：关闭窗口行为；ticket 13：Git 账号；
-//! ticket 18：mvnd settings.xml）。
+//! ticket 18：mvnd settings.xml；ticket 20：物化时自动注入 HTTP blocker 覆盖）。
 //!
 //! 跨 IPC 的值是 `'minimize' | 'quit'` 字符串（[`crate::settings`] 的持久化
 //! 契约）；非法值在写入侧即被拒绝，读取侧永远返回合法值。
@@ -139,6 +139,76 @@ pub fn settings_xml_path(appdata: &Path) -> PathBuf {
     appdata.join("mvnd-settings.xml")
 }
 
+/// ticket 20：HTTP blocker 覆盖注入块——同名 id `maven-default-http-blocker`
+/// 重定义 mvnd/Maven 3.8+ 全局自带的拦截镜像，`mirrorOf` 指向哑仓库且
+/// `blocked=false`，使全局 HTTP 仓库拦截失效（实机已验证：注入后可从公司
+/// HTTP 私服正常拉取依赖）。优先级高于用户 settings 里普通 mirror 定义。
+const HTTP_BLOCKER_OVERRIDE: &str = "<mirror><id>maven-default-http-blocker</id>\
+<mirrorOf>dummy-disabled-repo</mirrorOf><url>http://0.0.0.0/</url>\
+<blocked>false</blocked></mirror>";
+
+/// ASCII 大小写不敏感地在 `haystack` 中查找 `needle`（标签均为 ASCII，字节级
+/// 比较即可；返回原始字符串中的字节偏移）。
+fn find_ci_ascii(haystack: &str, needle: &str) -> Option<usize> {
+    let hb = haystack.as_bytes();
+    let nb = needle.as_bytes();
+    if nb.is_empty() {
+        return Some(0);
+    }
+    if nb.len() > hb.len() {
+        return None;
+    }
+    (0..=hb.len() - nb.len()).find(|&i| {
+        hb[i..i + nb.len()]
+            .iter()
+            .zip(nb)
+            .all(|(a, b)| a.eq_ignore_ascii_case(b))
+    })
+}
+
+/// ticket 20：物化前对用户 settings.xml 内容做 HTTP blocker 覆盖注入（字符串
+/// 级，与现有实现一致，不引入 XML 解析器）。
+///
+/// - 内容已含 id 为 `maven-default-http-blocker` 的 mirror（大小写/空白不敏
+///   感匹配）→ 用户已自行处理，原样返回；
+/// - 含 `<mirrors>` → 在第一个开标签的 `>` 之后插入注入块；
+/// - 无 `<mirrors>` → 在 `</settings>` 前插入 `<mirrors>注入块</mirrors>`；
+/// - 兜底（文档化）：内容连 `</settings>` 都没有（非标准片段，如自闭合
+///   `<settings/>`）→ 追加在文末。
+///
+/// 注入只发生在物化写入时：数据库仍存用户原文，编辑回显所见即所输。
+/// 幂等——对注入结果再注入结果不变（已有同名 id 即命中第一条规则）。
+fn inject_http_blocker_override(content: &str) -> String {
+    // 去空白 + 小写后匹配 id 行：容忍 `<id> maven-default-http-blocker </id>` 等。
+    let normalized: String = content
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .flat_map(char::to_lowercase)
+        .collect();
+    if normalized.contains("id>maven-default-http-blocker") {
+        return content.to_string();
+    }
+
+    if let Some(tag) = find_ci_ascii(content, "<mirrors") {
+        // 开标签内部不允许出现 '>'，取其后的第一个 '>' 作为开标签结束。
+        if let Some(gt) = content[tag..].find('>') {
+            let at = tag + gt + 1;
+            return format!("{}{}{}", &content[..at], HTTP_BLOCKER_OVERRIDE, &content[at..]);
+        }
+    }
+
+    if let Some(at) = find_ci_ascii(content, "</settings") {
+        return format!(
+            "{}<mirrors>{}</mirrors>{}",
+            &content[..at],
+            HTTP_BLOCKER_OVERRIDE,
+            &content[at..]
+        );
+    }
+
+    format!("{content}<mirrors>{HTTP_BLOCKER_OVERRIDE}</mirrors>")
+}
+
 /// 读取 mvnd settings.xml 状态（设置页卡片展示与编辑回填）。
 #[tauri::command]
 pub fn get_mvnd_settings_xml(app: AppHandle) -> Result<MvndSettingsXmlDto, ApiError> {
@@ -202,10 +272,12 @@ fn apply_mvnd_settings(
 }
 
 /// 物化：把 settings.xml 内容写到 `<appdata>/mvnd-settings.xml`（构建执行从
-/// 磁盘读取，mvnd 不认加密库）。
+/// 磁盘读取，mvnd 不认加密库）。写入的是**注入后**的内容（ticket 20：自动
+/// 放行 HTTP 私服仓库），数据库仍保留用户原文。
 fn materialize_settings_xml(appdata: &Path, content: &str) -> Result<(), ApiError> {
+    let effective = inject_http_blocker_override(content);
     std::fs::create_dir_all(appdata)
-        .and_then(|_| std::fs::write(settings_xml_path(appdata), content))
+        .and_then(|_| std::fs::write(settings_xml_path(appdata), effective))
         .map_err(|e| ApiError::raw("io", e.to_string()))
 }
 
@@ -329,15 +401,20 @@ mod mvnd_settings_tests {
         let dir = tempfile::tempdir().unwrap();
         let appdata = dir.path().join("appdata");
         let store = open(dir.path());
+        let original = "<settings></settings>";
 
-        let dto = apply_mvnd_settings(&store, &appdata, Some("<settings/>")).unwrap();
+        let dto = apply_mvnd_settings(&store, &appdata, Some(original)).unwrap();
 
-        assert_eq!(dto.content.as_deref(), Some("<settings/>"));
+        assert_eq!(dto.content.as_deref(), Some(original));
         assert!(dto.file_exists);
-        assert_eq!(xml(&appdata), "<settings/>");
+        // 物化文件含注入块（票 20），DB 仍存用户原文。
+        assert_eq!(
+            xml(&appdata),
+            format!("<settings><mirrors>{HTTP_BLOCKER_OVERRIDE}</mirrors></settings>")
+        );
         assert_eq!(
             store_settings::get_mvnd_settings_xml(&store).unwrap().as_deref(),
-            Some("<settings/>")
+            Some(original)
         );
     }
 
@@ -390,6 +467,107 @@ mod mvnd_settings_tests {
 
         apply_mvnd_settings(&store, &appdata, Some("<settings>v2</settings>")).unwrap();
 
-        assert_eq!(xml(&appdata), "<settings>v2</settings>");
+        assert_eq!(
+            xml(&appdata),
+            format!("<settings>v2<mirrors>{HTTP_BLOCKER_OVERRIDE}</mirrors></settings>")
+        );
+    }
+}
+
+#[cfg(test)]
+mod http_blocker_inject_tests {
+    use super::*;
+
+    /// 无 `<mirrors>`：注入块以 `<mirrors>…</mirrors>` 包裹后插到 `</settings>` 前。
+    #[test]
+    fn 无mirrors时在settings闭标签前插入注入块() {
+        let content = "<?xml version=\"1.0\"?>\n<settings>\n</settings>";
+
+        let out = inject_http_blocker_override(content);
+
+        assert_eq!(
+            out,
+            "<?xml version=\"1.0\"?>\n<settings>\n<mirrors>\
+             <mirror><id>maven-default-http-blocker</id>\
+             <mirrorOf>dummy-disabled-repo</mirrorOf><url>http://0.0.0.0/</url>\
+             <blocked>false</blocked></mirror></mirrors></settings>"
+        );
+    }
+
+    /// 含 `<mirrors>`：注入块插在第一个开标签之后，不额外包裹。
+    #[test]
+    fn 含mirrors时注入块插在开标签后() {
+        let content = "<settings><mirrors><mirror><id>internal</id></mirror></mirrors></settings>";
+
+        let out = inject_http_blocker_override(content);
+
+        assert_eq!(
+            out,
+            "<settings><mirrors><mirror><id>maven-default-http-blocker</id>\
+             <mirrorOf>dummy-disabled-repo</mirrorOf><url>http://0.0.0.0/</url>\
+             <blocked>false</blocked></mirror><mirror><id>internal</id></mirror>\
+             </mirrors></settings>"
+        );
+    }
+
+    /// 用户已自定义同名 id（大小写/空白不敏感）→ 原样物化，不重复注入。
+    #[test]
+    fn 已自定义blocker_id时原样返回() {
+        let content =
+            "<settings><mirrors><mirror><id> MAVEN-DEFAULT-HTTP-BLOCKER </id>\
+             <mirrorOf>*</mirrorOf><blocked>false</blocked></mirror></mirrors></settings>";
+
+        assert_eq!(inject_http_blocker_override(content), content);
+    }
+
+    /// 幂等：对注入结果再注入结果不变（同名 id 命中"用户已自行处理"分支）。
+    #[test]
+    fn 注入是幂等的() {
+        let content = "<settings></settings>";
+
+        let once = inject_http_blocker_override(content);
+
+        assert_eq!(inject_http_blocker_override(&once), once);
+    }
+
+    /// DB 存用户原文 / 物化文件含注入块的端到端契约（含 mirrors 的形态）。
+    #[test]
+    fn 数据库存原文而物化文件含注入块() {
+        let dir = tempfile::tempdir().unwrap();
+        let appdata = dir.path().join("appdata");
+        let store = crate::store::Store::open(
+            &dir.path().join("test.db"),
+            "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+        )
+        .unwrap();
+        let original = "<settings><mirrors></mirrors></settings>";
+
+        apply_mvnd_settings(&store, &appdata, Some(original)).unwrap();
+
+        assert_eq!(
+            crate::store::settings::get_mvnd_settings_xml(&store).unwrap().as_deref(),
+            Some(original)
+        );
+        let on_disk = std::fs::read_to_string(settings_xml_path(&appdata)).unwrap();
+        assert!(on_disk.contains(HTTP_BLOCKER_OVERRIDE));
+        assert_eq!(
+            on_disk,
+            "<settings><mirrors><mirror><id>maven-default-http-blocker</id>\
+             <mirrorOf>dummy-disabled-repo</mirrorOf><url>http://0.0.0.0/</url>\
+             <blocked>false</blocked></mirror></mirrors></settings>"
+        );
+    }
+
+    /// 兜底（文档化）：非标准片段无 `</settings>` 时追加在文末。
+    #[test]
+    fn 无settings闭标签时兜底追加文末() {
+        let out = inject_http_blocker_override("<settings/>");
+
+        assert_eq!(
+            out,
+            "<settings/><mirrors><mirror><id>maven-default-http-blocker</id>\
+             <mirrorOf>dummy-disabled-repo</mirrorOf><url>http://0.0.0.0/</url>\
+             <blocked>false</blocked></mirror></mirrors>"
+        );
     }
 }
