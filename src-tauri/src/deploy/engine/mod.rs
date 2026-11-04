@@ -1,8 +1,8 @@
 //! 部署执行编排 (deploy orchestration, ticket 10).
 //!
 //! For each 部署目标 (deployment target) in plan order:
-//! 1. **上传** — SFTP that target's own chosen build artifact (ticket 17
-//!    一一对应上传) from the 产物库 to the target's upload dir under its
+//! 1. **上传** — SFTP each of the target's resolved 文件名→目录 mapping rows
+//!    (ticket 19) from the 产物库 to the row's own upload dir under its
 //!    **original file name** (overwrite).
 //! 2. **停止** — run the 停止命令组 as one serial shell unit.
 //! 3. 停止成功 → **启动** — run the 启动命令组 the same way.
@@ -111,27 +111,29 @@ pub struct ConnInfo {
 }
 
 /// One per-target job: where to connect, what to upload and what to run.
-/// `artifact` is the per-target file choice (ticket 17 一一对应上传): targets
-/// without one skip the upload phase (单独执行启动命令组).
+/// `artifacts` are the per-target upload rows (ticket 19 文件名→目录映射行:
+/// each carries its own file and its own upload dir); a target with none
+/// skips the upload phase (单独执行启动命令组).
 #[derive(Debug, Clone)]
 pub struct TargetJob {
     pub target_id: i64,
-    pub upload_dir: String,
     pub stop_commands: Vec<String>,
     pub start_commands: Vec<String>,
     pub conn: ConnInfo,
-    pub artifact: Option<ArtifactRef>,
+    pub artifacts: Vec<ArtifactRef>,
 }
 
-/// The artifact to upload (from the 产物库), under its original file name.
+/// One upload of the plan (ticket 19): a file from the 产物库 uploaded into
+/// `upload_dir` under its **original file name** (overwrite).
 #[derive(Debug, Clone)]
 pub struct ArtifactRef {
     pub local_path: std::path::PathBuf,
     pub file_name: String,
+    pub upload_dir: String,
 }
 
-/// What [`run_deploy`] should do. A target whose [`TargetJob::artifact`] is
-/// `None` skips the upload; `run_stop: false` with no artifacts anywhere is
+/// What [`run_deploy`] should do. Targets with an empty [`TargetJob::artifacts`]
+/// list skip the upload; `run_stop: false` with no artifacts anywhere is
 /// the "单独执行启动命令组" (start-group-only) operation.
 #[derive(Debug, Clone)]
 pub struct DeployPlan {
@@ -216,6 +218,12 @@ pub enum DeployEvent {
         status: &'static str,
         stop_failed: bool,
         error: Option<String>,
+    },
+    /// 一条上传行被跳过的提示（ticket 19：空名行/缺失行跳过有提示）。不改变
+    /// 该目标的最终状态；仅用于 UI 通知。
+    Skipped {
+        target_id: i64,
+        message: String,
     },
     Finished {
         cancelled: bool,
@@ -321,66 +329,75 @@ where
             }
         };
 
-        // Phase 1: upload this target's own chosen file (original file name,
-        // overwrite). Targets without an assignment skip the upload.
-        if let Some(artifact) = &job.artifact {
+        // Phase 1: upload each of this target's mapping rows (original file
+        // name, overwrite, into the row's own dir). Rows are resolved by the
+        // command layer — an empty `artifacts` list skips the upload entirely.
+        if !job.artifacts.is_empty() {
             sink(DeployEvent::Phase {
                 target_id: job.target_id,
                 phase: "upload",
                 status: "running",
             });
-            let cancel2 = cancel.clone();
-            let mut progress = |transferred: u64, total: u64| {
-                sink(DeployEvent::UploadProgress {
-                    target_id: job.target_id,
-                    transferred,
-                    total,
-                });
-                !cancel2.load(std::sync::atomic::Ordering::Relaxed)
-            };
-            match transport
-                .upload(
-                    &artifact.local_path,
-                    &job.upload_dir,
-                    &artifact.file_name,
-                    &mut progress,
-                )
-                .await
-            {
-                Ok(()) => {
-                    let total = std::fs::metadata(&artifact.local_path)
-                        .map(|m| m.len())
-                        .unwrap_or(0);
-                    let output = ExecOutput {
-                        exit_code: 0,
-                        combined: format!(
-                            "uploaded {total} bytes to {} as {}",
-                            job.upload_dir, artifact.file_name
-                        ),
-                    };
-                    sink(DeployEvent::Output {
+            let mut outputs: Vec<String> = Vec::new();
+            let mut interrupted = false; // cancelled or failed mid-upload
+            for artifact in &job.artifacts {
+                let cancel2 = cancel.clone();
+                let mut progress = |transferred: u64, total: u64| {
+                    sink(DeployEvent::UploadProgress {
                         target_id: job.target_id,
-                        phase: "upload",
-                        output: output.combined.clone(),
-                        exit_code: 0,
+                        transferred,
+                        total,
                     });
-                    outcome.upload = Some(output);
-                }
-                Err(TransportError::Cancelled) => {
-                    cancelled = true;
-                    outcome.status = TargetStatus::Cancelled;
-                    finish(&mut sink, &outcome);
-                    outcomes.push(outcome);
-                    continue;
-                }
-                Err(e) => {
-                    outcome.status = TargetStatus::Failed;
-                    outcome.error = Some(e.to_string());
-                    finish(&mut sink, &outcome);
-                    outcomes.push(outcome);
-                    continue;
+                    !cancel2.load(std::sync::atomic::Ordering::Relaxed)
+                };
+                match transport
+                    .upload(
+                        &artifact.local_path,
+                        &artifact.upload_dir,
+                        &artifact.file_name,
+                        &mut progress,
+                    )
+                    .await
+                {
+                    Ok(()) => {
+                        let total = std::fs::metadata(&artifact.local_path)
+                            .map(|m| m.len())
+                            .unwrap_or(0);
+                        outputs.push(format!(
+                            "uploaded {total} bytes to {} as {}",
+                            artifact.upload_dir, artifact.file_name
+                        ));
+                    }
+                    Err(TransportError::Cancelled) => {
+                        cancelled = true;
+                        outcome.status = TargetStatus::Cancelled;
+                        interrupted = true;
+                        break;
+                    }
+                    Err(e) => {
+                        outcome.status = TargetStatus::Failed;
+                        outcome.error = Some(e.to_string());
+                        interrupted = true;
+                        break;
+                    }
                 }
             }
+            if interrupted {
+                finish(&mut sink, &outcome);
+                outcomes.push(outcome);
+                continue;
+            }
+            let combined = outputs.join("\n");
+            sink(DeployEvent::Output {
+                target_id: job.target_id,
+                phase: "upload",
+                output: combined.clone(),
+                exit_code: 0,
+            });
+            outcome.upload = Some(ExecOutput {
+                exit_code: 0,
+                combined,
+            });
         }
 
         // Phase 2: stop group. 停止失败则中止重启 — never run the start group.

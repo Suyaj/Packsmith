@@ -8,8 +8,13 @@
 //! cancellation goes through a registry-held [`CancelFlag`]. Auto-chain
 //! deployments run as detached background tasks and announce themselves via
 //! the `deploy-event` app event (envelope: `{ deployId, event }`).
+//!
+//! ticket 19: the upload set is the target's 文件名→目录 mapping rows
+//! (`deployment_target_files`). The dialog submits per-target row
+//! assignments — the checked, resolvable rows — and the engine uploads
+//! exactly that set (original-filename overwrite into each row's own dir).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicI64, Ordering};
 
@@ -109,7 +114,6 @@ fn resolve_jobs(
                 .map_err(|e| ApiError::raw("store", e.to_string()))?;
             Ok(TargetJob {
                 target_id: target.id,
-                upload_dir: target.upload_dir,
                 stop_commands: engine::split_command_group(&target.stop_commands),
                 start_commands: engine::split_command_group(&target.start_commands),
                 conn: ConnInfo {
@@ -120,15 +124,15 @@ fn resolve_jobs(
                     credential: server.credential.clone(),
                     fingerprint,
                 },
-                artifact: None,
+                artifacts: Vec::new(),
             })
         })
         .collect()
 }
 
 fn artifact_path(artifacts_dir: &str, file_name: &str) -> Result<std::path::PathBuf, ApiError> {
-    // The assignment must name a file from this build's artifact listing
-    // (ticket 17 校验): no path separators / traversal — anything else is
+    // The resolved file must name a file from this build's artifact listing
+    // (ticket 17/19 校验): no path separators / traversal — anything else is
     // rejected up front with the i18n-able `artifact_not_found` code.
     if file_name.is_empty()
         || file_name.contains('/')
@@ -151,13 +155,72 @@ fn artifact_path(artifacts_dir: &str, file_name: &str) -> Result<std::path::Path
     Ok(local_path)
 }
 
-/// One target's file choice (ticket 17 一一对应上传): deploy uploads
-/// `file_name` to `target_id`'s upload dir — each target gets its own file.
+/// One target's row assignments (ticket 19): the dialog submits the checked,
+/// resolvable mapping rows. `files[].file_name` only matters for 空名行
+/// (部署时补选) — named rows always use the file name persisted in the store.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RowAssignment {
+    pub row_id: i64,
+    pub file_name: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TargetAssignment {
     pub target_id: i64,
-    pub file_name: String,
+    pub files: Vec<RowAssignment>,
+}
+
+/// 解析一个目标的映射行（ticket 19）:
+/// - 具名行（`file_name` 非空）按本次构建的产物列表解析：`strict` 时缺失即
+///   报错（手动部署的兜底校验）；否则缺失行跳过并记入 skipped（自动连锁）。
+/// - 空名行使用 `picks`（部署对话框内联补选的文件名）；未补选则跳过。
+///
+/// Returns the resolved uploads (each with its own dir) plus the skipped-row
+/// notices (空名行跳过有提示).
+fn resolve_target_rows(
+    rows: &[targets_repo::TargetFile],
+    artifacts_dir: &str,
+    picks: &HashMap<i64, String>,
+    strict: bool,
+) -> Result<(Vec<engine::ArtifactRef>, Vec<String>), ApiError> {
+    let mut artifacts = Vec::new();
+    let mut skipped = Vec::new();
+    for row in rows {
+        let chosen = if row.file_name.trim().is_empty() {
+            match picks.get(&row.id).map(|p| p.trim().to_string()) {
+                Some(p) if !p.is_empty() => p,
+                _ => {
+                    skipped.push(format!("row {} (部署时补选): 未选择构件，已跳过", row.id));
+                    continue;
+                }
+            }
+        } else {
+            row.file_name.trim().to_string()
+        };
+        match artifact_path(artifacts_dir, &chosen) {
+            Ok(local_path) => artifacts.push(engine::ArtifactRef {
+                local_path,
+                file_name: chosen,
+                upload_dir: row.upload_dir.clone(),
+            }),
+            Err(e) => {
+                if strict {
+                    return Err(e);
+                }
+                skipped.push(format!("row {} ({chosen}): 产物缺失，已跳过", row.id));
+            }
+        }
+    }
+    Ok((artifacts, skipped))
+}
+
+/// 对话框提交的行必须在库内且属于该目标；同一行只能出现一次。
+fn assignment_row_ids_valid(rows: &[targets_repo::TargetFile], files: &[RowAssignment]) -> bool {
+    let known: HashSet<i64> = rows.iter().map(|r| r.id).collect();
+    let mut seen = HashSet::new();
+    files.iter().all(|f| known.contains(&f.row_id) && seen.insert(f.row_id))
 }
 
 #[tauri::command]
@@ -175,6 +238,7 @@ pub async fn start_deploy(
     }
     let store = (*app.state::<Store>()).clone();
 
+    let mut notices: Vec<(i64, String)> = Vec::new();
     let jobs = {
         let entry = history::list(&store, None)?
             .into_iter()
@@ -199,19 +263,46 @@ pub async fn start_deploy(
             ));
         }
         let mut jobs = resolve_jobs(&store, entry.project_id, &target_ids)?;
-        // Per-target artifact: every assigned file must exist in this build's
-        // artifact listing, otherwise the whole deploy is rejected up front.
+        // Per-target mapping rows: every assigned row must belong to its
+        // target; every uploaded file must exist in this build's artifact
+        // listing (strict — the dialog already disables missing rows).
+        let rows = targets_repo::files_for_targets(&store, &target_ids)
+            .map_err(|e| ApiError::raw("store", e.to_string()))?;
         for assignment in &assignments {
+            let rows: Vec<targets_repo::TargetFile> = rows
+                .iter()
+                .filter(|r| r.target_id == assignment.target_id)
+                .cloned()
+                .collect();
+            if !assignment_row_ids_valid(&rows, &assignment.files) {
+                return Err(ApiError::raw(
+                    "invalid_row",
+                    "an assignment row does not belong to its target (or is duplicated)",
+                ));
+            }
+            let picks: HashMap<i64, String> = assignment
+                .files
+                .iter()
+                .map(|f| (f.row_id, f.file_name.clone()))
+                .collect();
+            let (artifacts, skipped) =
+                resolve_target_rows(&rows, &artifacts_dir, &picks, true)?;
+            notices.extend(
+                skipped
+                    .into_iter()
+                    .map(|message| (assignment.target_id, message)),
+            );
             let job = jobs
                 .iter_mut()
                 .find(|j| j.target_id == assignment.target_id)
                 .expect("resolve_jobs preserves target order");
-            let file_name = assignment.file_name.trim().to_string();
-            let local_path = artifact_path(&artifacts_dir, &file_name)?;
-            job.artifact = Some(engine::ArtifactRef {
-                local_path,
-                file_name,
-            });
+            job.artifacts = artifacts;
+        }
+        if jobs.iter().all(|j| j.artifacts.is_empty()) {
+            return Err(ApiError::raw(
+                "no_files_selected",
+                "no resolvable upload rows in the assignments",
+            ));
         }
         jobs
     };
@@ -225,6 +316,9 @@ pub async fn start_deploy(
         // Channel 关闭（前端已离开）不构成失败理由。
         let _ = on_event.send(event);
     };
+    for (target_id, message) in notices {
+        sink(DeployEvent::Skipped { target_id, message });
+    }
     let summary = engine::run_deploy(
         DeployPlan {
             run_stop: true,
@@ -259,7 +353,7 @@ pub async fn run_start_group(
 ) -> Result<engine::DeploySummary, ApiError> {
     let store = (*app.state::<Store>()).clone();
     let target = targets_repo::get(&store, target_id)
-        .map_err(|e| ApiError::raw("store", e.to_string()))?
+        .map_err(ApiError::from)?
         .ok_or_else(|| ApiError::raw("invalid_target", format!("target {target_id} not found")))?;
     let jobs = resolve_jobs(&store, target.project_id, &[target_id])?;
 
@@ -286,15 +380,16 @@ pub async fn run_start_group(
 }
 
 /// 构建成功后自动连锁部署 hook: for every target of the project with the
-/// toggle ON, spawn a detached deploy of the just-built artifact. Events go
-/// out as `deploy-event` app events (`AutoDeployEvent` envelope). No-op when
-/// no artifact can be chosen (multiple artifacts and no default selection).
+/// toggle ON, resolve its mapping rows (ticket 19) against the just-built
+/// build's artifact directory. Only rows with a non-empty file name that
+/// resolve upload; 空名行 (部署时补选) are skipped — each with a `Skipped`
+/// notice event. A target with no resolvable rows is skipped entirely (never
+/// restart without a fresh artifact). Events go out as `deploy-event` app
+/// events (`AutoDeployEvent` envelope).
 pub fn auto_chain_after_build(
     app: &AppHandle,
     project_id: i64,
     history_id: i64,
-    artifact_candidates: &[String],
-    default_artifact: Option<&str>,
 ) -> Result<(), ApiError> {
     let store = (*app.state::<Store>()).clone();
 
@@ -304,14 +399,6 @@ pub fn auto_chain_after_build(
         return Ok(());
     }
 
-    let file_name = match artifact_candidates {
-        [single] => single.clone(),
-        many => match default_artifact {
-            Some(default) if many.iter().any(|c| c == default) => default.to_string(),
-            _ => return Ok(()), // 无法确定要部署哪个构件：自动连锁跳过
-        },
-    };
-
     let entry = history::list(&store, None)?
         .into_iter()
         .find(|e| e.id == history_id && e.success)
@@ -320,22 +407,37 @@ pub fn auto_chain_after_build(
         .artifacts_dir
         .clone()
         .ok_or_else(|| ApiError::raw("artifacts_dir_missing", entry.build_id.clone()))?;
-    let artifact = engine::ArtifactRef {
-        local_path: artifact_path(&artifacts_dir, &file_name)?,
-        file_name,
-    };
 
-    let jobs = resolve_jobs(&store, project_id, &enabled)?;
-    // 自动连锁 keeps its one-artifact-to-every-target shape: the same chosen
-    // artifact is attached to each target job (per-target assignment only
-    // applies to the manual deploy dialog).
-    let jobs = jobs
-        .into_iter()
-        .map(|mut job| {
-            job.artifact = Some(artifact.clone());
-            job
-        })
-        .collect();
+    let rows = targets_repo::files_for_targets(&store, &enabled)
+        .map_err(|e| ApiError::raw("store", e.to_string()))?;
+    let mut jobs = Vec::new();
+    let mut skipped_notices: Vec<(i64, String)> = Vec::new();
+    for target_id in enabled {
+        let rows: Vec<targets_repo::TargetFile> = rows
+            .iter()
+            .filter(|r| r.target_id == target_id)
+            .cloned()
+            .collect();
+        // Lenient: missing / unnamed rows skip with a notice instead of
+        // failing the auto-chain (自动连锁只传可解析行).
+        let (artifacts, skipped) = resolve_target_rows(&rows, &artifacts_dir, &HashMap::new(), false)?;
+        skipped_notices.extend(skipped.into_iter().map(|m| (target_id, m)));
+        if artifacts.is_empty() {
+            skipped_notices.push((
+                target_id,
+                "没有可解析的上传行，已跳过该目标".to_string(),
+            ));
+            continue;
+        }
+        let mut job = resolve_jobs(&store, project_id, &[target_id])?.remove(0);
+        job.artifacts = artifacts;
+        jobs.push(job);
+    }
+    if jobs.is_empty() {
+        // No target has a resolvable row: nothing to deploy (no-op, ticket 19).
+        return Ok(());
+    }
+
     let plan = DeployPlan {
         run_stop: true,
         targets: jobs,
@@ -351,6 +453,9 @@ pub fn auto_chain_after_build(
         let sink = move |event: DeployEvent| {
             let _ = emitter.emit("deploy-event", AutoDeployEvent { deploy_id, event });
         };
+        for (target_id, message) in skipped_notices {
+            sink(DeployEvent::Skipped { target_id, message });
+        }
         let summary = engine::run_deploy(plan, factory, cancel, sink).await;
         // 自动连锁部署同样落部署记录（ticket 12）；记录失败不影响部署。
         let _ = deploy_history::record_outcomes(&store, &summary);
@@ -365,7 +470,7 @@ pub fn auto_chain_after_build(
 mod tests {
     use super::*;
 
-    /// ticket 17 校验: only files actually in this build's artifact listing
+    /// ticket 17/19 校验: only files actually in this build's artifact listing
     /// resolve; anything else (missing file, path traversal) is rejected with
     /// the stable `artifact_not_found` code the frontend keys Chinese i18n on.
     #[test]
@@ -381,5 +486,127 @@ mod tests {
             let err = artifact_path(dir.path().to_str().unwrap(), bad).unwrap_err();
             assert_eq!(err.code(), "artifact_not_found", "case {bad:?}");
         }
+    }
+
+    fn row(id: i64, target_id: i64, file_name: &str, upload_dir: &str) -> targets_repo::TargetFile {
+        targets_repo::TargetFile {
+            id,
+            target_id,
+            file_name: file_name.to_string(),
+            upload_dir: upload_dir.to_string(),
+            position: 0,
+        }
+    }
+
+    /// ticket 19 解析: a named row present in the artifact listing resolves to
+    /// an upload into its own dir with the original file name.
+    #[test]
+    fn resolve_named_row_matching_the_listing() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("app.jar"), b"x").unwrap();
+        let rows = vec![row(1, 10, "app.jar", "/srv/app")];
+
+        let (artifacts, skipped) =
+            resolve_target_rows(&rows, dir.path().to_str().unwrap(), &HashMap::new(), true)
+                .unwrap();
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].file_name, "app.jar");
+        assert_eq!(artifacts[0].upload_dir, "/srv/app");
+        assert!(skipped.is_empty());
+    }
+
+    /// ticket 19 解析: a named row whose product is missing — strict (manual
+    /// deploy backstop) rejects with `artifact_not_found`; lenient (auto-chain)
+    /// skips it with a 产物缺失 notice.
+    #[test]
+    fn resolve_named_row_missing_product_strict_vs_lenient() {
+        let dir = tempfile::tempdir().unwrap();
+        let rows = vec![row(2, 10, "gone.jar", "/srv/app")];
+
+        let err = resolve_target_rows(&rows, dir.path().to_str().unwrap(), &HashMap::new(), true)
+            .unwrap_err();
+        assert_eq!(err.code(), "artifact_not_found");
+
+        let (artifacts, skipped) =
+            resolve_target_rows(&rows, dir.path().to_str().unwrap(), &HashMap::new(), false)
+                .unwrap();
+        assert!(artifacts.is_empty());
+        assert_eq!(skipped.len(), 1);
+        assert!(skipped[0].contains("产物缺失"));
+    }
+
+    /// ticket 19 解析: 空名行（旧数据迁移行）需要对话框补选；未补选则跳过。
+    #[test]
+    fn resolve_empty_row_requires_pick_and_skips_without_one() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("picked.jar"), b"x").unwrap();
+        let rows = vec![row(3, 10, "", "/srv/app")];
+
+        // 未补选：跳过（有提示），什么也不上传。
+        let (artifacts, skipped) =
+            resolve_target_rows(&rows, dir.path().to_str().unwrap(), &HashMap::new(), true)
+                .unwrap();
+        assert!(artifacts.is_empty());
+        assert_eq!(skipped.len(), 1);
+
+        // 补选后按补选的文件名解析，上传目录仍是该行自己的目录。
+        let picks = HashMap::from([(3i64, "picked.jar".to_string())]);
+        let (artifacts, skipped) =
+            resolve_target_rows(&rows, dir.path().to_str().unwrap(), &picks, true).unwrap();
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].file_name, "picked.jar");
+        assert_eq!(artifacts[0].upload_dir, "/srv/app");
+        assert!(skipped.is_empty());
+    }
+
+    /// 自动连锁（lenient）只保留可解析行：具名且产物存在；空名行与缺失行
+    /// 都被跳过并给出提示，目标仍有可解析行时照常部署。
+    #[test]
+    fn auto_chain_resolution_keeps_only_resolvable_named_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.jar"), b"x").unwrap();
+        let rows = vec![
+            row(1, 10, "a.jar", "/srv/a"),
+            row(2, 10, "", "/srv/empty"),
+            row(3, 10, "missing.jar", "/srv/missing"),
+        ];
+
+        let (artifacts, skipped) =
+            resolve_target_rows(&rows, dir.path().to_str().unwrap(), &HashMap::new(), false)
+                .unwrap();
+        assert_eq!(
+            artifacts.iter().map(|a| a.file_name.as_str()).collect::<Vec<_>>(),
+            vec!["a.jar"]
+        );
+        assert_eq!(skipped.len(), 2, "空名行与缺失行都要有跳过提示");
+    }
+
+    /// 提交的行必须真实存在且属于该目标（防跨目标/伪造行 id）。
+    #[test]
+    fn assignment_row_ids_must_belong_to_the_target_and_be_unique() {
+        let rows = vec![row(1, 10, "a.jar", "/srv/a")];
+        let ok = vec![RowAssignment {
+            row_id: 1,
+            file_name: String::new(),
+        }];
+        assert!(assignment_row_ids_valid(&rows, &ok));
+
+        let foreign = vec![RowAssignment {
+            row_id: 99,
+            file_name: String::new(),
+        }];
+        assert!(!assignment_row_ids_valid(&rows, &foreign));
+
+        let duplicated = vec![
+            RowAssignment {
+                row_id: 1,
+                file_name: String::new(),
+            },
+            RowAssignment {
+                row_id: 1,
+                file_name: String::new(),
+            },
+        ];
+        assert!(!assignment_row_ids_valid(&rows, &duplicated));
     }
 }
