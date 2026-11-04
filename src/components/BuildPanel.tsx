@@ -1,18 +1,10 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Channel } from "@tauri-apps/api/core";
-import { ChevronsUpDownIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import FuzzyCombobox from "@/components/FuzzyCombobox";
 import DeployDialog from "@/components/DeployDialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Command,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/components/ui/command";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { filterBranches } from "@/lib/branchFilter";
 import {
   cancelBuildWorkspace,
   listRemoteBranches,
@@ -40,24 +32,6 @@ function formatCommitTime(time: number): string {
   return new Date(time * 1000).toLocaleString();
 }
 
-/** 分支项渲染：命中字符按下标高亮（模糊搜索匹配片段）。 */
-function HighlightedBranch({ text, indices }: { text: string; indices: number[] }) {
-  if (indices.length === 0) return <>{text}</>;
-  const parts: ReactNode[] = [];
-  let cursor = 0;
-  for (const idx of indices) {
-    if (idx > cursor) parts.push(text.slice(cursor, idx));
-    parts.push(
-      <span key={idx} data-highlight className="font-semibold text-primary">
-        {text[idx]}
-      </span>,
-    );
-    cursor = idx + 1;
-  }
-  if (cursor < text.length) parts.push(text.slice(cursor));
-  return <>{parts}</>;
-}
-
 /**
  * 打包面板（ticket 06/07）：打开时实时拉取分支列表（默认选中上次使用的
  * 分支），构建命令随项目可编辑；确认后走完整打包流程——创建临时工作区并
@@ -68,8 +42,6 @@ function BuildPanel({ project, onClose }: { project: Project; onClose: () => voi
   const { t } = useTranslation();
   const [branches, setBranches] = useState<string[] | null>(null);
   const [branch, setBranch] = useState("");
-  const [branchPickerOpen, setBranchPickerOpen] = useState(false);
-  const [branchQuery, setBranchQuery] = useState("");
   const [branchError, setBranchError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -83,8 +55,6 @@ function BuildPanel({ project, onClose }: { project: Project; onClose: () => voi
   const [buildCommand, setBuildCommand] = useState(project.build_command);
   const [commandSaved, setCommandSaved] = useState(false);
   const [selectedArtifacts, setSelectedArtifacts] = useState<string[]>([]);
-  const [artifactPickerOpen, setArtifactPickerOpen] = useState(false);
-  const [artifactQuery, setArtifactQuery] = useState("");
   const [defaultArtifactSaved, setDefaultArtifactSaved] = useState(false);
   const [deploying, setDeploying] = useState(false);
 
@@ -232,55 +202,19 @@ function BuildPanel({ project, onClose }: { project: Project; onClose: () => voi
           {branches !== null && branches.length > 0 && (
             <label className="flex flex-col gap-1">
               {t("projects.build.branch")}
-              <Popover
-                open={branchPickerOpen}
-                onOpenChange={(open) => {
-                  setBranchPickerOpen(open);
-                  // 关闭时清空搜索关键字，下次打开展示完整列表。
-                  if (!open) setBranchQuery("");
-                }}
-              >
-                <PopoverTrigger asChild disabled={busy}>
-                  <Button
-                    variant="outline"
-                    role="combobox"
-                    aria-expanded={branchPickerOpen}
-                    className="w-full justify-between font-normal"
-                  >
-                    <span className="truncate">{branch || t("projects.build.selectBranch")}</span>
-                    <ChevronsUpDownIcon className="size-4 opacity-50" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-(--radix-popover-trigger-width) p-0">
-                  {/* 过滤由前端模糊匹配完成，关闭 cmdk 内置过滤。 */}
-                  <Command shouldFilter={false}>
-                    <CommandInput
-                      value={branchQuery}
-                      onValueChange={setBranchQuery}
-                      placeholder={t("projects.build.searchBranch")}
-                    />
-                    <CommandList>
-                      {filterBranches(branches, branchQuery).map(({ branch: b, indices }) => (
-                        <CommandItem
-                          key={b}
-                          value={b}
-                          onSelect={(value) => {
-                            setBranch(value);
-                            setBranchPickerOpen(false);
-                          }}
-                        >
-                          <HighlightedBranch text={b} indices={indices} />
-                        </CommandItem>
-                      ))}
-                      {filterBranches(branches, branchQuery).length === 0 && (
-                        <div className="py-6 text-center text-sm text-muted-foreground">
-                          {t("projects.build.noMatchingBranches")}
-                        </div>
-                      )}
-                    </CommandList>
-                  </Command>
-                </PopoverContent>
-              </Popover>
+              {/* 可搜索 Combobox（票 14）：模糊过滤 + 命中高亮在
+                  FuzzyCombobox 内实现。 */}
+              <FuzzyCombobox
+                items={branches}
+                selected={branch ? [branch] : []}
+                onSelect={setBranch}
+                disabled={busy}
+                ariaLabel={t("projects.build.branch")}
+                searchPlaceholder={t("projects.build.searchBranch")}
+                emptyText={t("projects.build.noMatchingBranches")}
+                renderValue={() => branch || t("projects.build.selectBranch")}
+                className="w-full"
+              />
             </label>
           )}
 
@@ -373,79 +307,28 @@ function BuildPanel({ project, onClose }: { project: Project; onClose: () => voi
               <legend className="text-sm font-medium">
                 {t("projects.build.artifactPickerTitle")}
               </legend>
-              {/* 可搜索多选 Combobox（票 21）：过滤走前端模糊匹配（与分支
-                  选择器同款），勾选后下拉保持展开，可继续调整。 */}
-              <Popover
-                open={artifactPickerOpen}
-                onOpenChange={(open) => {
-                  setArtifactPickerOpen(open);
-                  if (!open) setArtifactQuery("");
-                }}
-              >
-                <PopoverTrigger asChild disabled={busy}>
-                  <Button
-                    variant="outline"
-                    role="combobox"
-                    aria-label={t("projects.build.artifactPickerTitle")}
-                    aria-expanded={artifactPickerOpen}
-                    className="mt-1 w-full justify-between font-normal"
-                  >
-                    <span className="truncate">
-                      {selectedArtifacts.length > 0
-                        ? selectedArtifacts.join("、")
-                        : t("projects.build.selectArtifacts")}
-                    </span>
-                    <ChevronsUpDownIcon className="size-4 shrink-0 opacity-50" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-(--radix-popover-trigger-width) p-0">
-                  <Command shouldFilter={false}>
-                    <CommandInput
-                      value={artifactQuery}
-                      onValueChange={setArtifactQuery}
-                      placeholder={t("projects.build.searchArtifacts")}
-                    />
-                    <CommandList>
-                      {filterBranches(
-                        outcome.artifacts.map((a) => a.file_name),
-                        artifactQuery,
-                      ).map(({ branch: name, indices }) => {
-                        const checked = selectedArtifacts.includes(name);
-                        return (
-                          <CommandItem
-                            key={name}
-                            value={name}
-                            onSelect={() => {
-                              setSelectedArtifacts((prev) =>
-                                prev.includes(name)
-                                  ? prev.filter((n) => n !== name)
-                                  : [...prev, name],
-                              );
-                            }}
-                          >
-                            <input
-                              type="checkbox"
-                              aria-label={name}
-                              checked={checked}
-                              onChange={() => {}}
-                              className="pointer-events-none"
-                            />
-                            <HighlightedBranch text={name} indices={indices} />
-                          </CommandItem>
-                        );
-                      })}
-                      {filterBranches(
-                        outcome.artifacts.map((a) => a.file_name),
-                        artifactQuery,
-                      ).length === 0 && (
-                        <div className="py-6 text-center text-sm text-muted-foreground">
-                          {t("projects.build.noMatchingArtifacts")}
-                        </div>
-                      )}
-                    </CommandList>
-                  </Command>
-                </PopoverContent>
-              </Popover>
+              {/* 可搜索多选 Combobox（票 21）：勾选后下拉保持展开，可继续
+                  调整；模糊过滤 + 命中高亮在 FuzzyCombobox 内实现。 */}
+              <FuzzyCombobox
+                multiple
+                items={outcome.artifacts.map((a) => a.file_name)}
+                selected={selectedArtifacts}
+                onSelect={(name) =>
+                  setSelectedArtifacts((prev) =>
+                    prev.includes(name)
+                      ? prev.filter((n) => n !== name)
+                      : [...prev, name],
+                  )
+                }
+                disabled={busy}
+                ariaLabel={t("projects.build.artifactPickerTitle")}
+                searchPlaceholder={t("projects.build.searchArtifacts")}
+                emptyText={t("projects.build.noMatchingArtifacts")}
+                renderValue={(sel) =>
+                  sel.length > 0 ? sel.join("、") : t("projects.build.selectArtifacts")
+                }
+                className="mt-1 w-full"
+              />
               <div className="mt-2 flex items-center gap-2">
                 <Button
                   variant="outline"

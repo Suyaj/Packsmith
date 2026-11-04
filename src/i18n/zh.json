@@ -367,7 +367,16 @@
       "dir": "上传目录",
       "unnamedFile": "（未指定文件）",
       "missingWarning": "产物缺失：本次构建没有该文件，已禁用",
-      "pickLabel": "部署时补选构件"
+      "pickLabel": "部署时补选构件",
+      "pickPlaceholder": "选择构件…",
+      "searchArtifacts": "搜索构件…",
+      "noMatchingArtifacts": "没有匹配的构件"
+    },
+    "batch": {
+      "title": "批量补选",
+      "placeholder": "勾选构件，按顺序填入空名行",
+      "apply": "填入空名行",
+      "filledNotice": "已填入 {{filled}} 行，{{extra}} 个构件无处可填"
     }
   },
   "common": {

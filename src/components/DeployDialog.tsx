@@ -1,15 +1,17 @@
-// 部署对话框（ticket 10 / 19 / 23）：确认解析后的上传计划——每个部署目标
+// 部署对话框（ticket 10 / 19 / 23 / 24）：确认解析后的上传计划——每个部署目标
 // 逐行展示其 文件名→目录 映射行（可勾选；产物缺失的行禁用+标红警告；空文件名行
-// 内联补选），上传集合 = 勾选集合。对话框级操作选择（重启/仅上传/仅停止/
-// 仅启动，票 23）：仅停止/仅启动时上传计划区只读展示、payload 只带目标；
-// 依次部署；展示各目标阶段状态、跳过提示与输出快照；重启时停止失败中止重启
-// 并提供"单独执行启动命令组"；部署进行中可取消。
+// 内联补选，cmdk 可搜索 Combobox），上传集合 = 勾选集合。批量补选（票 24）：
+// 一次勾选多个构件按 目标顺序→行顺序 填入空名行，多出构件提示。对话框级操作
+// 选择（重启/仅上传/仅停止/仅启动，票 23）：仅停止/仅启动时上传计划区只读展示、
+// payload 只带目标；依次部署；展示各目标阶段状态、跳过提示与输出快照；重启时
+// 停止失败中止重启并提供"单独执行启动命令组"；部署进行中可取消。
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Channel } from "@tauri-apps/api/core";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import FuzzyCombobox from "@/components/FuzzyCombobox";
 import {
   cancelDeploy,
   runStartGroup,
@@ -97,6 +99,9 @@ function DeployDialog({
   const [views, setViews] = useState<Map<number, TargetView>>(new Map());
   // 本次操作（票 23，对话框级）：重启（默认）/ 仅上传 / 仅停止 / 仅启动。
   const [operation, setOperation] = useState<DeployOperation>("restart");
+  // 批量补选（票 24）：多选勾选集（按勾选顺序）+ 多出构件的提示。
+  const [batchPicks, setBatchPicks] = useState<string[]>([]);
+  const [batchNotice, setBatchNotice] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
@@ -133,6 +138,8 @@ function DeployDialog({
       setRowState(plan);
       setSelectedIds([]);
       setOperation("restart");
+      setBatchPicks([]);
+      setBatchNotice(null);
       setViews(new Map(targetList.map((target) => [target.id, { ...INITIAL_VIEW, outputs: {}, notices: [] }])));
       setLoadError(null);
     } catch (e) {
@@ -225,6 +232,37 @@ function DeployDialog({
 
   /** 本次操作是否传文件（重启/仅上传）：仅停止/仅启动只执行命令组（票 23）。 */
   const uploadsFiles = operation === "restart" || operation === "upload";
+
+  // 空名行（部署时补选）数量：批量补选入口的可见条件之一（票 24）。
+  const emptyRowCount = (targets ?? []).reduce(
+    (count, target) =>
+      count + target.files.filter((row) => row.fileName.trim() === "").length,
+    0,
+  );
+
+  /** 批量补选确认（票 24）：按勾选顺序填入各目标空名行（目标顺序 → 目标内
+   * 行顺序），填入行默认勾选；构件多于空名行时多出的忽略并提示。只改本次
+   * 部署的补选值，不改映射行集合；具名行不参与。 */
+  const applyBatchFill = () => {
+    if (batchPicks.length === 0) return;
+    const emptyRowIds: number[] = [];
+    for (const target of targets ?? []) {
+      for (const row of target.files) {
+        if (row.fileName.trim() === "") emptyRowIds.push(row.id);
+      }
+    }
+    const filled = Math.min(batchPicks.length, emptyRowIds.length);
+    const extra = batchPicks.length - filled;
+    setRowState((prev) => {
+      const next = new Map(prev);
+      for (let i = 0; i < filled; i++) {
+        next.set(emptyRowIds[i], { checked: true, pick: batchPicks[i] });
+      }
+      return next;
+    });
+    setBatchNotice(extra > 0 ? t("deploy.batch.filledNotice", { filled, extra }) : null);
+    setBatchPicks([]);
+  };
 
   const handleStart = async () => {
     if (artifacts === null) return;
@@ -346,6 +384,48 @@ function DeployDialog({
           {!uploadsFiles && (
             <p className="text-xs text-muted-foreground">{t("deploy.planReadonlyHint")}</p>
           )}
+          {/* 批量补选（票 24）：仅当存在空名行且本次操作传文件时可见。 */}
+          {uploadsFiles && emptyRowCount > 0 && (
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center gap-2">
+                <FuzzyCombobox
+                  multiple
+                  items={names}
+                  selected={batchPicks}
+                  onSelect={(name) =>
+                    setBatchPicks((prev) =>
+                      prev.includes(name)
+                        ? prev.filter((n) => n !== name)
+                        : [...prev, name],
+                    )
+                  }
+                  disabled={running}
+                  ariaLabel={t("deploy.batch.title")}
+                  searchPlaceholder={t("deploy.plan.searchArtifacts")}
+                  emptyText={t("deploy.plan.noMatchingArtifacts")}
+                  renderValue={(sel) =>
+                    sel.length > 0 ? sel.join("、") : t("deploy.batch.placeholder")
+                  }
+                  className="max-w-72"
+                  testId="deploy-batch"
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  data-testid="deploy-batch-apply"
+                  disabled={running || batchPicks.length === 0}
+                  onClick={applyBatchFill}
+                >
+                  {t("deploy.batch.apply")}
+                </Button>
+              </div>
+              {batchNotice && (
+                <p role="status" data-testid="deploy-batch-notice" className="text-xs text-amber-600 dark:text-amber-400">
+                  {batchNotice}
+                </p>
+              )}
+            </div>
+          )}
           {targets !== null && targets.length === 0 && (
             <p className="text-sm text-muted-foreground">{t("deploy.noTargets")}</p>
           )}
@@ -384,6 +464,7 @@ function DeployDialog({
                         const missing = rowMissing(row, names);
                         const unnamed = row.fileName.trim() === "";
                         const checked = rowState.get(row.id)?.checked ?? false;
+                        const pick = rowState.get(row.id)?.pick ?? "";
                         return (
                           <tr
                             key={row.id}
@@ -420,27 +501,29 @@ function DeployDialog({
                                 </span>
                               )}
                               {unnamed && !missing && (
-                                <select
-                                  aria-label={t("deploy.plan.pickLabel")}
-                                  data-testid={`deploy-row-select-${target.id}-${row.id}`}
-                                  value={rowState.get(row.id)?.pick ?? ""}
-                                  disabled={running || !uploadsFiles}
-                                  className="ml-2 rounded-md border bg-background px-1 py-0.5 text-xs"
-                                  onChange={(e) =>
+                                // 票 24：补选升级为可搜索 Combobox（与打包面板
+                                // 选择器同款模糊过滤 + 命中高亮），单选选中即收起。
+                                <FuzzyCombobox
+                                  items={names}
+                                  selected={pick ? [pick] : []}
+                                  onSelect={(name) =>
                                     setRowState((prev) => {
                                       const next = new Map(prev);
                                       const current = prev.get(row.id) ?? { checked, pick: "" };
-                                      next.set(row.id, { ...current, pick: e.target.value });
+                                      next.set(row.id, { ...current, pick: name });
                                       return next;
                                     })
                                   }
-                                >
-                                  {names.map((name) => (
-                                    <option key={name} value={name}>
-                                      {name}
-                                    </option>
-                                  ))}
-                                </select>
+                                  disabled={running || !uploadsFiles}
+                                  ariaLabel={t("deploy.plan.pickLabel")}
+                                  searchPlaceholder={t("deploy.plan.searchArtifacts")}
+                                  emptyText={t("deploy.plan.noMatchingArtifacts")}
+                                  renderValue={() =>
+                                    pick || t("deploy.plan.pickPlaceholder")
+                                  }
+                                  className="ml-2 h-7 max-w-56 px-2 text-xs"
+                                  testId={`deploy-row-select-${target.id}-${row.id}`}
+                                />
                               )}
                             </td>
                             <td className="font-mono text-muted-foreground">{row.uploadDir}</td>
