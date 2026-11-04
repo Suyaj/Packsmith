@@ -295,17 +295,18 @@ describe("部署目标面板", () => {
   });
 
   it("删除：确认后调用 delete_deployment_target 并刷新", async () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     mockBackend({ delete_deployment_target: true });
 
     render(<DeploymentTargetsPanel projectId={5} projectName="demo-app" />);
     await userEvent.click(await screen.findByRole("button", { name: "删除" }));
 
+    // 确认对话框（Tauri WebView 不支持 window.confirm）出现后点确认
+    await userEvent.click(await screen.findByTestId("confirm-dialog"));
+    await userEvent.click(await screen.findByRole("button", { name: "确认" }));
+
     await waitFor(() => {
       expect(expectInvoke("delete_deployment_target").id).toBe(1);
     });
-    expect(confirmSpy).toHaveBeenCalledWith("确定删除该部署目标吗？");
-    confirmSpy.mockRestore();
   });
 });
 

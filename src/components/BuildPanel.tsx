@@ -469,6 +469,17 @@ function BuildPanel({ project, onClose }: { project: Project; onClose: () => voi
             </div>
           )}
 
+          {deploying && outcome && outcome.history_id !== null && (
+            <DeployDialog
+              projectId={project.id}
+              projectName={project.name}
+              historyId={outcome.history_id}
+              open
+              onClose={() => setDeploying(false)}
+              defaultArtifacts={project.default_artifacts ?? []}
+            />
+          )}
+
           {error && (
             <p role="alert" className="text-destructive">
               {error}
@@ -483,17 +494,6 @@ function BuildPanel({ project, onClose }: { project: Project; onClose: () => voi
               {busy ? t("projects.build.cancelWork") : t("projects.build.close")}
             </Button>
           </div>
-
-          {deploying && outcome && outcome.history_id !== null && (
-            <DeployDialog
-              projectId={project.id}
-              projectName={project.name}
-              historyId={outcome.history_id}
-              open
-              onClose={() => setDeploying(false)}
-              defaultArtifacts={project.default_artifacts ?? []}
-            />
-          )}
         </div>
       </CardContent>
     </Card>

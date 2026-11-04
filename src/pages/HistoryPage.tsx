@@ -19,6 +19,7 @@ import {
 } from "@/lib/historyApi";
 import { listProjects, readBuildLog, type Project } from "@/lib/buildApi";
 import DeployDialog from "@/components/DeployDialog";
+import ConfirmDialog from "@/components/ConfirmDialog";
 
 type BackendError = { code: string; message: string };
 
@@ -53,6 +54,10 @@ function HistoryPage() {
   const [openArtifactsId, setOpenArtifactsId] = useState<number | null>(null);
   const [artifacts, setArtifacts] = useState<ArtifactFile[]>([]);
   const [deployEntry, setDeployEntry] = useState<HistoryEntry | null>(null);
+  // 待确认的删除/清理动作（Tauri WebView 不支持 window.confirm，改用对话框）
+  const [confirmAction, setConfirmAction] = useState<
+    { kind: "delete"; entry: HistoryEntry } | { kind: "cleanup" } | null
+  >(null);
 
   const load = useCallback(
     async (projectId: string) => {
@@ -128,7 +133,7 @@ function HistoryPage() {
   }
 
   async function handleDelete(entry: HistoryEntry) {
-    if (!window.confirm(t("history.confirmDelete"))) return;
+    setConfirmAction(null);
     try {
       await deleteBuildHistory(entry.id);
       await load(projectFilter);
@@ -139,7 +144,7 @@ function HistoryPage() {
 
   async function handleCleanup() {
     if (projectFilter === "") return;
-    if (!window.confirm(t("history.confirmCleanup"))) return;
+    setConfirmAction(null);
     try {
       await cleanupProjectHistory(Number(projectFilter));
       await load(projectFilter);
@@ -170,7 +175,11 @@ function HistoryPage() {
           </select>
         </label>
         {projectFilter !== "" && (
-          <Button variant="outline" size="sm" onClick={handleCleanup}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setConfirmAction({ kind: "cleanup" })}
+          >
             {t("history.cleanup")}
           </Button>
         )}
@@ -232,7 +241,11 @@ function HistoryPage() {
                           {t("history.deploy")}
                         </Button>
                       )}
-                      <Button variant="outline" size="sm" onClick={() => handleDelete(entry)}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setConfirmAction({ kind: "delete", entry })}
+                      >
                         {t("history.delete")}
                       </Button>
                     </span>
@@ -261,22 +274,40 @@ function HistoryPage() {
                       )}
                     </ul>
                   )}
+                  {/* 部署对话框展开在本条目正下方，避免隔整页列表 */}
+                  {deployEntry?.id === entry.id && (
+                    <DeployDialog
+                      projectId={deployEntry.project_id}
+                      projectName={deployEntry.project_name}
+                      historyId={deployEntry.id}
+                      open
+                      onClose={() => setDeployEntry(null)}
+                    />
+                  )}
                 </li>
               ))}
             </ul>
           </CardContent>
         </Card>
       )}
-
-      {deployEntry && (
-        <DeployDialog
-          projectId={deployEntry.project_id}
-          projectName={deployEntry.project_name}
-          historyId={deployEntry.id}
-          open
-          onClose={() => setDeployEntry(null)}
-        />
-      )}
+      <ConfirmDialog
+        open={confirmAction !== null}
+        onOpenChange={(open) => {
+          if (!open) setConfirmAction(null);
+        }}
+        title={
+          confirmAction?.kind === "cleanup"
+            ? t("history.confirmCleanup")
+            : t("history.confirmDelete")
+        }
+        confirmLabel={t("common.confirm")}
+        cancelLabel={t("common.cancel")}
+        onConfirm={() => {
+          if (confirmAction?.kind === "cleanup") void handleCleanup();
+          else if (confirmAction?.kind === "delete")
+            void handleDelete(confirmAction.entry);
+        }}
+      />
     </section>
   );
 }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
+import ConfirmDialog from "@/components/ConfirmDialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { listServers, type Server } from "@/lib/serversApi";
 import { setTargetAutoDeploy } from "@/lib/deployApi";
@@ -97,6 +98,8 @@ function DeploymentTargetsPanel({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // 待确认删除的部署目标（Tauri WebView 不支持 window.confirm，改用对话框）
+  const [confirmDelete, setConfirmDelete] = useState<Target | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -199,7 +202,7 @@ function DeploymentTargetsPanel({
   };
 
   const handleDelete = async (target: Target) => {
-    if (!window.confirm(t("targets.confirmDelete"))) return;
+    setConfirmDelete(null);
     await deleteDeploymentTarget(target.id);
     await refresh();
   };
@@ -390,7 +393,7 @@ function DeploymentTargetsPanel({
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => void handleDelete(target)}
+                        onClick={() => setConfirmDelete(target)}
                       >
                         {t("targets.delete")}
                       </Button>
@@ -445,6 +448,18 @@ function DeploymentTargetsPanel({
             );
           })}
         </div>
+      <ConfirmDialog
+        open={confirmDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) setConfirmDelete(null);
+        }}
+        title={t("targets.confirmDelete")}
+        confirmLabel={t("common.confirm")}
+        cancelLabel={t("common.cancel")}
+        onConfirm={() => {
+          if (confirmDelete !== null) void handleDelete(confirmDelete);
+        }}
+      />
       </CardContent>
     </Card>
   );

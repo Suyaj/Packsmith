@@ -360,5 +360,9 @@
       "missingWarning": "产物缺失：本次构建没有该文件，已禁用",
       "pickLabel": "部署时补选构件"
     }
+  },
+  "common": {
+    "confirm": "确认",
+    "cancel": "取消"
   }
 }

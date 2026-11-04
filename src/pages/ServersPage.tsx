@@ -15,6 +15,7 @@ import {
   type TestOutcome,
 } from "@/lib/serversApi";
 import { Button } from "@/components/ui/button";
+import ConfirmDialog from "@/components/ConfirmDialog";
 import {
   Card,
   CardContent,
@@ -119,6 +120,8 @@ function outcomeText(
 function ServersPage() {
   const { t } = useTranslation();
   const [servers, setServers] = useState<Server[]>([]);
+  // 待确认删除的服务器（Tauri WebView 不支持 window.confirm，改用对话框）
+  const [confirmDelete, setConfirmDelete] = useState<Server | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
   const [editingServer, setEditingServer] = useState<Server | null>(null);
@@ -229,7 +232,7 @@ function ServersPage() {
   };
 
   const handleDelete = async (server: Server) => {
-    if (!window.confirm(t("servers.confirmDelete", { host: server.host }))) return;
+    setConfirmDelete(null);
     await deleteServer(server.id);
     await refresh();
   };
@@ -490,7 +493,7 @@ function ServersPage() {
                 <Button size="sm" variant="outline" onClick={() => openEdit(server)}>
                   {t("servers.edit")}
                 </Button>
-                <Button size="sm" variant="outline" onClick={() => void handleDelete(server)}>
+                <Button size="sm" variant="outline" onClick={() => setConfirmDelete(server)}>
                   {t("servers.delete")}
                 </Button>
               </div>
@@ -503,6 +506,18 @@ function ServersPage() {
           </Card>
         ))}
       </div>
+      <ConfirmDialog
+        open={confirmDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) setConfirmDelete(null);
+        }}
+        title={t("servers.confirmDelete", { host: confirmDelete?.host ?? "" })}
+        confirmLabel={t("common.confirm")}
+        cancelLabel={t("common.cancel")}
+        onConfirm={() => {
+          if (confirmDelete !== null) void handleDelete(confirmDelete);
+        }}
+      />
     </section>
   );
 }

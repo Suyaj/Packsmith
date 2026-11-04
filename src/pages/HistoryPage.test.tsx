@@ -132,7 +132,6 @@ describe("构建历史页", () => {
   });
 
   it("删除一条历史：构件与日志一并删除并刷新列表", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     mockBackend({
       list_build_history: () => entries,
       list_projects: () => projects,
@@ -146,14 +145,16 @@ describe("构建历史页", () => {
     await screen.findAllByTestId("history-row");
     await userEvent.click(screen.getAllByRole("button", { name: "删除" })[0]);
 
+    // 确认对话框（Tauri WebView 不支持 window.confirm）出现后点确认
+    await userEvent.click(await screen.findByTestId("confirm-dialog"));
+    await userEvent.click(await screen.findByRole("button", { name: "确认" }));
+
     await waitFor(() => {
       expect(mockInvoke).toHaveBeenCalledWith("delete_build_history", { historyId: 3 });
     });
-    confirm.mockRestore();
   });
 
   it("按项目筛选后可手动清理该项目的全部历史", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     mockBackend({
       list_build_history: () => entries,
       list_projects: () => projects,
@@ -173,10 +174,13 @@ describe("构建历史页", () => {
     await userEvent.selectOptions(screen.getByLabelText("按项目筛选"), "1");
     await userEvent.click(await screen.findByRole("button", { name: "清理该项目历史" }));
 
+    // 确认对话框（Tauri WebView 不支持 window.confirm）出现后点确认
+    await userEvent.click(await screen.findByTestId("confirm-dialog"));
+    await userEvent.click(await screen.findByRole("button", { name: "确认" }));
+
     await waitFor(() => {
       expect(mockInvoke).toHaveBeenCalledWith("cleanup_project_history", { projectId: 1 });
     });
-    confirm.mockRestore();
   });
 });
 
@@ -211,10 +215,12 @@ describe("构建历史页（部署入口）", () => {
 
     await userEvent.click(screen.getByTestId("deploy-history-3"));
 
-    expect(await screen.findByTestId("deploy-dialog")).toBeInTheDocument();
+    const dialog = await screen.findByTestId("deploy-dialog");
+    // 对话框展开在所点条目正下方（同一 li 内），不隔整页列表
+    expect(dialog.closest('li[data-testid="history-row"]')).not.toBeNull();
   });
 
-  // 部署对话框内联在历史列表之后：记录多时位于折叠线以下，挂载需滚动进视口。
+  // 对话框虽展开在所点条目正下方，仍可能超出视口底部：挂载需滚动进视口。
   it("点击部署后对话框滚动进可视区域", async () => {
     mockBackend({
       list_build_history: () => entries,

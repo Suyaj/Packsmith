@@ -235,7 +235,6 @@ describe("服务器管理页", () => {
   });
 
   it("删除：确认后调用 delete_server 并刷新列表", async () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     invokeMock.mockImplementation(async (command: string) => {
       if (command === "list_servers") return [passwordServer()];
       if (command === "delete_server") return true;
@@ -245,11 +244,13 @@ describe("服务器管理页", () => {
     render(<ServersPage />);
     await userEvent.click(await screen.findByRole("button", { name: "删除" }));
 
+    // 确认对话框（Tauri WebView 不支持 window.confirm）出现后点确认
+    await userEvent.click(await screen.findByTestId("confirm-dialog"));
+    await userEvent.click(await screen.findByRole("button", { name: "确认" }));
+
     await waitFor(() => {
       expect(expectInvoke("delete_server").id).toBe(1);
     });
-    expect(confirmSpy).toHaveBeenCalledWith("确定删除服务器 web-1.example.com 吗？");
-    confirmSpy.mockRestore();
   });
 
   it("连接测试成功时展示成功", async () => {
