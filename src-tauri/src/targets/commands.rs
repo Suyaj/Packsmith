@@ -42,13 +42,15 @@ pub struct TargetDto {
     pub id: i64,
     pub project_id: i64,
     pub server_id: i64,
+    /// 默认上传目录（票 26）：自由勾选的构件上传到这里。
+    pub upload_dir: String,
     pub start_commands: String,
     pub stop_commands: String,
     /// 构建成功后自动连锁部署 (ticket 10, 默认关).
     pub auto_deploy: bool,
     /// 上次该目标部署选择的构件 (ticket 17)；ticket 19 起废弃，UI 不再使用。
     pub last_artifact: Option<String>,
-    /// 文件名→上传目录映射行 (ticket 19)。
+    /// 文件名→上传目录映射行（票 19；票 26 起降级为部署对话框的预设，可选）。
     pub files: Vec<TargetFileDto>,
 }
 
@@ -58,6 +60,7 @@ impl TargetDto {
             id: target.id,
             project_id: target.project_id,
             server_id: target.server_id,
+            upload_dir: target.upload_dir.clone(),
             start_commands: target.start_commands.clone(),
             stop_commands: target.stop_commands.clone(),
             auto_deploy: target.auto_deploy,
@@ -96,18 +99,22 @@ pub fn create_deployment_target(
     store: State<'_, Store>,
     project_id: i64,
     server_id: i64,
-    files: Vec<TargetFileInput>,
+    // upload_dir：默认上传目录（票 26，必填）。
+    upload_dir: String,
+    // files：映射行（票 19；票 26 起可选，可全删——预设驱动部署对话框）。
+    files: Option<Vec<TargetFileInput>>,
     start_commands: String,
     stop_commands: String,
 ) -> Result<TargetDto, ApiError> {
     let new = NewTarget {
         project_id,
         server_id,
+        upload_dir,
         start_commands,
         stop_commands,
     };
     let created = repo::create(&store, &new)?;
-    replace_files(&store, created.id, files)?;
+    replace_files(&store, created.id, files.unwrap_or_default())?;
     Ok(TargetDto::build(
         &created,
         file_dtos(&store, created.id),
@@ -120,7 +127,10 @@ pub fn update_deployment_target(
     id: i64,
     project_id: i64,
     server_id: i64,
-    files: Vec<TargetFileInput>,
+    // upload_dir：默认上传目录（票 26，必填）。
+    upload_dir: String,
+    // files：映射行（票 19；票 26 起可选，可全删——预设驱动部署对话框）。
+    files: Option<Vec<TargetFileInput>>,
     start_commands: String,
     stop_commands: String,
     auto_deploy: bool,
@@ -131,14 +141,14 @@ pub fn update_deployment_target(
         id,
         project_id,
         server_id,
-        upload_dir: existing.as_ref().map(|t| t.upload_dir.clone()).unwrap_or_default(),
+        upload_dir,
         start_commands,
         stop_commands,
         auto_deploy,
         last_artifact: existing.and_then(|t| t.last_artifact),
     };
     let updated = repo::update(&store, &target)?;
-    replace_files(&store, id, files)?;
+    replace_files(&store, id, files.unwrap_or_default())?;
     Ok(TargetDto::build(&updated, file_dtos(&store, id)))
 }
 

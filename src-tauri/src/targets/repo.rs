@@ -14,6 +14,9 @@ use crate::store::Store;
 pub struct NewTarget {
     pub project_id: i64,
     pub server_id: i64,
+    /// 默认上传目录（票 26）：自由勾选的构件（非预设条目）上传到这里。必填，
+    /// 单行非空。
+    pub upload_dir: String,
     pub start_commands: String,
     pub stop_commands: String,
 }
@@ -24,8 +27,8 @@ pub struct Target {
     pub id: i64,
     pub project_id: i64,
     pub server_id: i64,
-    /// 废弃（ticket 19）：上传目录已表格化为 [`TargetFile`] 映射行，此列仅
-    /// 为避免破坏性迁移而保留，不再承载业务数据。
+    /// 默认上传目录（票 26 恢复为业务字段）：自由勾选的构件上传到这里。
+    /// 票 19–25 期间废弃（映射行承载目录），迁移 v15 从首个映射行回填。
     pub upload_dir: String,
     pub start_commands: String,
     pub stop_commands: String,
@@ -37,8 +40,9 @@ pub struct Target {
     pub last_artifact: Option<String>,
 }
 
-/// 一行 文件名→上传目录 映射（ticket 19）：部署时按行匹配构建产物并上传到
-/// 该行的目录。`file_name` 为空 = 旧数据迁移出的"部署时补选"行。
+/// 一行 文件名→上传目录 映射（票 19；票 26 起降级为部署对话框的**预设**）：
+/// 部署对话框把具名行对应的构件默认勾选并沿用该行的目录。`file_name` 为空
+/// 的行不产生预设（票 26：空名行不再单独展示，可在对话框内自由勾选替代）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TargetFile {
     pub id: i64,
@@ -102,20 +106,21 @@ pub fn list_for_project(store: &Store, project_id: i64) -> Result<Vec<Target>, R
 
 /// Inserts a deployment target and returns the persisted record.
 ///
-/// Validates that the referenced project and server exist and that the
+/// Validates that the referenced project and server exist, that the
 /// project × server pair is not bound yet (the table also carries a
-/// `UNIQUE (project_id, server_id)` constraint as a backstop).
+/// `UNIQUE (project_id, server_id)` constraint as a backstop), and that the
+/// 默认上传目录 (票 26) is a single non-empty line.
 pub fn create(store: &Store, target: &NewTarget) -> Result<Target, RepoError> {
     check_references(store, target.project_id, target.server_id)?;
     if binding_exists(store, target.project_id, target.server_id, None)? {
         return Err(RepoError::DuplicateBinding);
     }
+    let upload_dir = normalize_upload_dir(&target.upload_dir)?;
     let normalized = Target {
         id: 0,
         project_id: target.project_id,
         server_id: target.server_id,
-        // 废弃列（ticket 19）：上传目录在 deployment_target_files 行里。
-        upload_dir: String::new(),
+        upload_dir,
         start_commands: normalize_commands(&target.start_commands),
         stop_commands: normalize_commands(&target.stop_commands),
         auto_deploy: false,
@@ -150,8 +155,8 @@ pub fn update(store: &Store, target: &Target) -> Result<Target, RepoError> {
         return Err(RepoError::DuplicateBinding);
     }
     let normalized = Target {
-        // 废弃列（ticket 19）：保持原值不动，业务数据在映射行里。
-        upload_dir: target.upload_dir.clone(),
+        // 默认上传目录（票 26）：业务字段，随表单更新。
+        upload_dir: normalize_upload_dir(&target.upload_dir)?,
         start_commands: normalize_commands(&target.start_commands),
         stop_commands: normalize_commands(&target.stop_commands),
         ..target.clone()
@@ -237,9 +242,22 @@ pub fn files_for_targets(
     })?)
 }
 
-/// Validates one mapping row (ticket 19): the upload dir must be a single
-/// non-empty line; the file name may be empty (部署时补选 legacy row) but the
-/// same non-empty name may not repeat within one target.
+/// 规整默认上传目录（票 26）：两侧空白去除，必须是非空单行。
+fn normalize_upload_dir(upload_dir: &str) -> Result<String, RepoError> {
+    let upload_dir = upload_dir.trim().to_string();
+    if upload_dir.is_empty() {
+        return Err(RepoError::EmptyUploadDir);
+    }
+    if upload_dir.lines().count() > 1 {
+        return Err(RepoError::UploadDirMultiline);
+    }
+    Ok(upload_dir)
+}
+
+/// Validates one mapping row (ticket 19; 票 26 起行语义不变、映射行集合可选):
+/// the upload dir must be a single non-empty line; the file name may be empty
+/// (legacy unnamed row — 不产生预设) but the same non-empty name may not
+/// repeat within one target.
 fn normalize_file_rows(files: &[NewTargetFile]) -> Result<Vec<(String, String)>, RepoError> {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     files
@@ -363,9 +381,9 @@ pub enum RepoError {
     MissingServer,
     /// This project already binds that server (project × server is unique).
     DuplicateBinding,
-    /// A mapping row (ticket 19) has an empty upload dir — not allowed.
+    /// 默认上传目录（票 26）或一行映射行的目录为空——不允许。
     EmptyUploadDir,
-    /// A mapping row's upload dir spans several lines — not allowed.
+    /// 默认上传目录（票 26）或一行映射行的目录跨多行——不允许。
     UploadDirMultiline,
     /// The same non-empty file name appears twice within one target's rows.
     DuplicateFileName(String),
@@ -381,9 +399,9 @@ impl std::fmt::Display for RepoError {
             RepoError::DuplicateBinding => {
                 write!(f, "this project already binds that server")
             }
-            RepoError::EmptyUploadDir => write!(f, "a mapping row's upload dir must not be empty"),
+            RepoError::EmptyUploadDir => write!(f, "an upload dir must not be empty"),
             RepoError::UploadDirMultiline => {
-                write!(f, "a mapping row's upload dir must be a single line")
+                write!(f, "an upload dir must be a single line")
             }
             RepoError::DuplicateFileName(name) => {
                 write!(f, "the file name {name:?} appears twice in this target's rows")
