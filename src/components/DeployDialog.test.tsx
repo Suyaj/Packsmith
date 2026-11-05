@@ -1,8 +1,8 @@
-// 部署对话框（ticket 10 / 19 / 23 / 24）行为测试：确认解析后的上传计划——
-// 逐目标展示文件名→目录映射行（默认勾选）、产物缺失行禁用+警告、空名行内联
-// 补选（票 24：cmdk 可搜索 Combobox）、批量补选按序填入空名行、上传集合 =
-// 勾选集合、跳过提示、目标多选、状态/输出快照展示、停止失败中止重启 + 单独
-// 执行启动命令组、取消。
+// 部署对话框（ticket 10 / 19 / 23 / 24 / 25）行为测试：确认解析后的上传计划——
+// 逐目标展示文件名→目录映射行（默认勾选）、产物缺失行禁用+警告、空名行只读
+// 展示补选结果（票 25：逐行下拉移除，批量补选为唯一填充入口，重复执行按序
+// 覆盖重填）、上传集合 = 勾选集合、跳过提示、目标多选、状态/输出快照展示、
+// 停止失败中止重启 + 单独执行启动命令组、取消。
 
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -199,9 +199,9 @@ describe("DeployDialog", () => {
     ]);
   });
 
-  // 票 21：空名行预选按项目默认构件列表**依序**取第一个可用项；
-  // 列表用尽（全部缺失）回退首个可用产物。
-  it("空名行预选默认构件列表中第一个可用项，列表用尽回退首个产物", async () => {
+  // 票 21：空名行预选按项目默认构件列表**依序**取第一个可用项；列表用尽
+  // （全部缺失）回退首个可用产物。票 25：预选结果只读展示，无逐行下拉。
+  it("空名行只读展示预选结果：默认构件列表依序取第一个可用项，列表用尽回退首个产物", async () => {
     render(
       <DeployDialog
         projectId={5}
@@ -215,49 +215,42 @@ describe("DeployDialog", () => {
 
     await userEvent.click(await screen.findByTestId("deploy-target-1"));
 
-    // 列表首项缺失跳过，取第一个可用项 other-1.0.jar（而非首个产物 app）。
-    const pick = screen.getByTestId("deploy-row-select-1-102");
-    expect(pick).toHaveAttribute("role", "combobox");
+    // 逐行下拉已移除；只读展示取第一个可用项 other-1.0.jar（而非首个产物 app）。
+    expect(screen.queryByTestId("deploy-row-select-1-102")).not.toBeInTheDocument();
+    const pick = screen.getByTestId("deploy-row-pick-1-102");
     expect(pick).toHaveTextContent("other-1.0.jar");
     expect(pick).not.toHaveTextContent("app-1.0.jar");
   });
 
-  it("空名行内联补选：默认预选首个产物，改动随 payload 提交", async () => {
+  // 票 25：空名行只读展示补选结果，逐行下拉移除、批量补选为唯一填充入口；
+  // 行勾选（是否上传）仍可用。
+  it("空名行只读展示补选结果，逐行下拉移除、行勾选仍可用", async () => {
     render(
-      <DeployDialog
-        projectId={5}
-        projectName="演示项目"
-        historyId={7}
-        open
-        onClose={vi.fn()}
-        defaultArtifacts={["missing.jar", "also-missing.jar"]}
-      />,
+      <DeployDialog projectId={5} projectName="演示项目" historyId={7} open onClose={vi.fn()} />,
     );
 
     await userEvent.click(await screen.findByTestId("deploy-target-1"));
 
-    // 列表用尽（全部缺失）：回退首个可用产物。
-    expect(screen.getByTestId("deploy-plan-1")).toHaveTextContent("（未指定文件）");
-    expect(screen.getByTestId("deploy-row-select-1-102")).toHaveTextContent("app-1.0.jar");
+    // 逐行下拉已移除；空名行只读展示补选结果（默认预选首个产物）。
+    expect(screen.queryByTestId("deploy-row-select-1-102")).not.toBeInTheDocument();
+    expect(screen.getByTestId("deploy-row-pick-1-102")).toHaveTextContent("app-1.0.jar");
 
-    // 票 24：补选为可搜索 Combobox——展开后点选构件。
-    await userEvent.click(screen.getByTestId("deploy-row-select-1-102"));
-    await userEvent.click(await screen.findByRole("option", { name: "other-1.0.jar" }));
-    await userEvent.click(screen.getByTestId("deploy-submit"));
+    // 行勾选仍可用：取消勾选再勾回。
+    const check = screen.getByTestId("deploy-row-check-1-102");
+    await userEvent.click(check);
+    expect(check).not.toBeChecked();
+    await userEvent.click(check);
+    expect(check).toBeChecked();
+  });
 
-    await waitFor(() =>
-      expect(screen.getByTestId("deploy-status-1")).toHaveTextContent("部署成功"),
+  // 票 25：无入库构件时空名行没有补选结果，只读展示「未指定」。
+  it("没有入库构件时空名行补选结果显示「未指定」", async () => {
+    mockBackend({ artifacts: [] });
+    render(
+      <DeployDialog projectId={5} projectName="演示项目" historyId={7} open onClose={vi.fn()} />,
     );
-    const call = invokeMock.mock.calls.find(([cmd]) => cmd === "start_deploy");
-    expect(call?.[1].assignments).toEqual([
-      {
-        targetId: 1,
-        files: [
-          { rowId: 101, fileName: "" },
-          { rowId: 102, fileName: "other-1.0.jar" },
-        ],
-      },
-    ]);
+
+    expect(await screen.findByTestId("deploy-row-pick-1-102")).toHaveTextContent("未指定");
   });
 
   it("取消勾选的行不进入 payload（上传集合 = 勾选集合）", async () => {
@@ -597,10 +590,10 @@ describe("DeployDialog", () => {
     await userEvent.click(await screen.findByTestId("deploy-target-1"));
     await userEvent.selectOptions(screen.getByTestId("deploy-operation"), "stop");
 
-    // 上传计划区只读：行勾选与空名行补选均禁用（不参与本次操作）。
+    // 上传计划区只读：行勾选禁用；空名行补选结果仍只读展示（票 25）。
     expect(screen.getByTestId("deploy-row-check-1-101")).toBeDisabled();
     expect(screen.getByTestId("deploy-row-check-1-102")).toBeDisabled();
-    expect(screen.getByTestId("deploy-row-select-1-102")).toBeDisabled();
+    expect(screen.getByTestId("deploy-row-pick-1-102")).toHaveTextContent("app-1.0.jar");
 
     await userEvent.click(screen.getByTestId("deploy-submit"));
     await waitFor(() =>
@@ -635,15 +628,15 @@ describe("DeployDialog", () => {
     expect(screen.getByTestId("deploy-submit")).toBeEnabled();
   });
 
-  // ---- 票 24：空名行补选可模糊搜索 + 批量补选 ----
+  // ---- 票 24 / 25：批量补选可模糊搜索（逐行下拉已移除，搜索能力留在批量入口）----
 
-  it("空名行补选支持模糊搜索：关键字实时过滤并高亮命中片段", async () => {
+  it("批量补选支持模糊搜索：关键字实时过滤并高亮命中片段", async () => {
     render(
       <DeployDialog projectId={5} projectName="演示项目" historyId={7} open onClose={vi.fn()} />,
     );
 
     await userEvent.click(await screen.findByTestId("deploy-target-1"));
-    await userEvent.click(screen.getByTestId("deploy-row-select-1-102"));
+    await userEvent.click(screen.getByTestId("deploy-batch"));
 
     // 操作选择器是原生 select（其 option 也是 role=option），option 断言
     // 限定在补选下拉的列表框内（搜索输入框在列表框外）。
@@ -666,15 +659,16 @@ describe("DeployDialog", () => {
     expect(within(list).queryByRole("option")).not.toBeInTheDocument();
   });
 
-  // 下拉不再钉死为触发器宽度（行内触发器窄，长构件名会被截断——用户反馈）：
-  // 最小宽度=触发器，选项不换行可撑开，上限为视口可用宽度。
+  // 下拉不再钉死为触发器宽度（触发器窄，长构件名会被截断——用户反馈）：
+  // 最小宽度=触发器，选项不换行可撑开，上限为视口可用宽度。票 25：断言
+  // 目标改为批量补选的 Combobox（逐行下拉已移除）。
   it("补选下拉宽度随内容撑开：最小触发器宽、选项不换行、上限可用宽", async () => {
     render(
       <DeployDialog projectId={5} projectName="演示项目" historyId={7} open onClose={vi.fn()} />,
     );
 
     await userEvent.click(await screen.findByTestId("deploy-target-1"));
-    await userEvent.click(screen.getByTestId("deploy-row-select-1-102"));
+    await userEvent.click(screen.getByTestId("deploy-batch"));
 
     const list = await screen.findByRole("listbox");
     const content = list.closest("[data-radix-popper-content-wrapper]")?.firstElementChild ??
@@ -736,10 +730,10 @@ describe("DeployDialog", () => {
     await userEvent.click(screen.getByTestId("deploy-batch-apply"));
 
     // 目标顺序 → 目标内行顺序：102（目标 1）→ 201 → 202（目标 2）。
-    expect(screen.getByTestId("deploy-row-select-1-102")).toHaveTextContent("b-web.war");
-    expect(screen.getByTestId("deploy-row-select-2-201")).toHaveTextContent("a-api.jar");
+    expect(screen.getByTestId("deploy-row-pick-1-102")).toHaveTextContent("b-web.war");
+    expect(screen.getByTestId("deploy-row-pick-2-201")).toHaveTextContent("a-api.jar");
     // 202 无人可填：保持既有空行预选行为（首个产物 a-api.jar，勾选）。
-    expect(screen.getByTestId("deploy-row-select-2-202")).toHaveTextContent("a-api.jar");
+    expect(screen.getByTestId("deploy-row-pick-2-202")).toHaveTextContent("a-api.jar");
     expect(screen.getByTestId("deploy-row-check-1-102")).toBeChecked();
     expect(screen.getByTestId("deploy-row-check-2-201")).toBeChecked();
     expect(screen.getByTestId("deploy-row-check-2-202")).toBeChecked();
@@ -799,10 +793,12 @@ describe("DeployDialog", () => {
       "已填入 1 行，1 个构件无处可填",
     );
     // 只填入勾选顺序里的第一个构件。
-    expect(screen.getByTestId("deploy-row-select-1-102")).toHaveTextContent("b-web.war");
+    expect(screen.getByTestId("deploy-row-pick-1-102")).toHaveTextContent("b-web.war");
   });
 
-  it("批量补选后逐行覆盖：单行改选不影响其他行，payload 取覆盖值", async () => {
+  // 票 25：批量补选是唯一填充入口，重复执行按序覆盖重填（取代票 24 的逐行
+  // 覆盖）：再次填入时按勾选顺序覆盖既有补选值，payload 取覆盖后的值。
+  it("批量补选重复执行按序覆盖重填，payload 取覆盖后的值", async () => {
     mockBackend({ targets: batchTargets, artifacts: batchArtifacts });
 
     render(
@@ -811,14 +807,24 @@ describe("DeployDialog", () => {
 
     await userEvent.click(await screen.findByTestId("deploy-target-1"));
     await userEvent.click(await screen.findByTestId("deploy-target-2"));
+
+    // 第一次填入：b-web.war → 102，a-api.jar → 201（202 预选 a-api.jar）。
     await userEvent.click(screen.getByTestId("deploy-batch"));
     await userEvent.click(await screen.findByRole("option", { name: /b-web\.war/ }));
     await userEvent.click(screen.getByRole("option", { name: /a-api\.jar/ }));
     await userEvent.click(screen.getByTestId("deploy-batch-apply"));
+    expect(screen.getByTestId("deploy-row-pick-1-102")).toHaveTextContent("b-web.war");
 
-    // 单行覆盖目标 1 的空名行：b-web.war → a-api.jar。
-    await userEvent.click(screen.getByTestId("deploy-row-select-1-102"));
-    await userEvent.click(await screen.findByRole("option", { name: "a-api.jar" }));
+    // 重复执行：按新的勾选顺序覆盖重填。
+    await userEvent.click(screen.getByTestId("deploy-batch"));
+    await userEvent.click(await screen.findByRole("option", { name: /a-api\.jar/ }));
+    await userEvent.click(screen.getByRole("option", { name: /b-web\.war/ }));
+    await userEvent.click(screen.getByRole("option", { name: /c-app\.jar/ }));
+    await userEvent.click(screen.getByTestId("deploy-batch-apply"));
+
+    expect(screen.getByTestId("deploy-row-pick-1-102")).toHaveTextContent("a-api.jar");
+    expect(screen.getByTestId("deploy-row-pick-2-201")).toHaveTextContent("b-web.war");
+    expect(screen.getByTestId("deploy-row-pick-2-202")).toHaveTextContent("c-app.jar");
 
     await userEvent.click(screen.getByTestId("deploy-submit"));
     await waitFor(() =>
@@ -836,8 +842,8 @@ describe("DeployDialog", () => {
       {
         targetId: 2,
         files: [
-          { rowId: 201, fileName: "a-api.jar" },
-          { rowId: 202, fileName: "a-api.jar" },
+          { rowId: 201, fileName: "b-web.war" },
+          { rowId: 202, fileName: "c-app.jar" },
         ],
       },
     ]);
