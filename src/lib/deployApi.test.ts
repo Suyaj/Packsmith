@@ -27,9 +27,10 @@ beforeEach(() => {
 });
 
 describe("deployApi", () => {
-  // 票 23：对话框级操作（重启/仅上传/仅停止/仅启动）随 payload 提交。
+  // 票 26：payload 改为每目标自由勾选条目 entries{fileName, uploadDir}
+  // （预设条目 = 行目录，自由条目 = 目标默认目录）；rowId 不再提交。
   it.each(["restart", "upload", "stop", "start"] as DeployOperation[])(
-    "start_deploy 携带历史 id、操作（%s）与逐目标的行 assignments",
+    "start_deploy 携带历史 id、操作（%s）与逐目标的 entries",
     async (operation) => {
       invokeMock.mockResolvedValue({ cancelled: false, targets: [] });
       const onEvent = { onmessage: null } as never;
@@ -37,8 +38,8 @@ describe("deployApi", () => {
         7,
         operation,
         [
-          { targetId: 1, files: [{ rowId: 11, fileName: "app-1.0.jar" }] },
-          { targetId: 2, files: [{ rowId: 21, fileName: "other-1.0.jar" }] },
+          { targetId: 1, entries: [{ fileName: "app-1.0.jar", uploadDir: "/srv/app" }] },
+          { targetId: 2, entries: [] },
         ],
         onEvent,
       );
@@ -47,8 +48,8 @@ describe("deployApi", () => {
         historyId: 7,
         operation,
         assignments: [
-          { targetId: 1, files: [{ rowId: 11, fileName: "app-1.0.jar" }] },
-          { targetId: 2, files: [{ rowId: 21, fileName: "other-1.0.jar" }] },
+          { targetId: 1, entries: [{ fileName: "app-1.0.jar", uploadDir: "/srv/app" }] },
+          { targetId: 2, entries: [] },
         ],
         onEvent,
       });

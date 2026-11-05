@@ -386,13 +386,13 @@ function BuildPanel({ project, onClose }: { project: Project; onClose: () => voi
           )}
 
           {deploying && outcome && outcome.history_id !== null && (
+            // 票 26：预设只由映射行驱动，对话框不再吃项目默认构件列表。
             <DeployDialog
               projectId={project.id}
               projectName={project.name}
               historyId={outcome.history_id}
               open
               onClose={() => setDeploying(false)}
-              defaultArtifacts={project.default_artifacts ?? []}
             />
           )}
 

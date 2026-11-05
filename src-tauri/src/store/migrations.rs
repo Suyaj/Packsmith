@@ -121,7 +121,8 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         sql: "ALTER TABLE deployment_targets ADD COLUMN last_artifact TEXT;",
     },
     // ticket 19: 上传目录表格化——文件名→目录映射子表。`upload_dir` 列保留但
-    // 废弃（不再读写业务数据，仅避免破坏性迁移）：映射行才是部署上传依据。
+    // 废弃（票 19–25 期间不再读写业务数据）：映射行才是部署上传依据；票 26 起
+    // 该列恢复为"目标默认上传目录"（迁移 v15 回填）。
     // 旧数据迁移：每个既有目标回填一行 {file_name: '', upload_dir: 旧目录}，
     // 空文件名 = 部署时需在对话框内补选。
     Migration {
@@ -163,6 +164,26 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 14,
         name: "ticket 23: deploy_records.operation (部署操作类型, 旧记录默认 restart)",
         sql: "ALTER TABLE deploy_records ADD COLUMN operation TEXT NOT NULL DEFAULT 'restart';",
+    },
+    // ticket 26: 部署时自由勾选构件——`upload_dir` 列恢复为业务字段（目标
+    // 默认上传目录，自由勾选的构件上传到这里）。旧数据迁移：该列自票 19 起
+    // 废弃为空，回填自每个目标**首个映射行**（position 顺序）的目录；已有
+    // 值（票 19 前的老目标）不覆盖；映射行数据原样保留（降级为预设）。
+    Migration {
+        version: 15,
+        name: "ticket 26: deployment_targets.upload_dir 恢复为默认上传目录（回填首个映射行目录）",
+        sql: "UPDATE deployment_targets
+              SET upload_dir = (
+                  SELECT f.upload_dir FROM deployment_target_files f
+                  WHERE f.target_id = deployment_targets.id
+                  ORDER BY f.position, f.id
+                  LIMIT 1
+              )
+              WHERE trim(deployment_targets.upload_dir) = ''
+                AND EXISTS (
+                    SELECT 1 FROM deployment_target_files f
+                    WHERE f.target_id = deployment_targets.id
+                );",
     },
 ];
 

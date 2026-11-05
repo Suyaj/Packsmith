@@ -59,6 +59,8 @@ fn new_target(project_id: i64, server_id: i64) -> NewTarget {
     NewTarget {
         project_id,
         server_id,
+        // 票 26：默认上传目录恢复为必填业务字段（自由勾选的构件上传到这里）。
+        upload_dir: "/srv/app".to_string(),
         start_commands: "cd /home/app\nsh start.sh start".to_string(),
         stop_commands: "sh start.sh stop".to_string(),
     }
@@ -101,14 +103,75 @@ fn created_target_round_trips_all_fields() {
             id: created.id,
             project_id: project,
             server_id: server,
-            // 废弃列（ticket 19）：新目标不再写上传目录，映射行才是数据。
-            upload_dir: String::new(),
+            // 票 26：默认上传目录恢复为业务字段（自由勾选的构件上传到这里）。
+            upload_dir: "/srv/app".to_string(),
             start_commands: "cd /home/app\nsh start.sh start".to_string(),
             stop_commands: "sh start.sh stop".to_string(),
             auto_deploy: false,
             last_artifact: None,
         }
     );
+}
+
+/// 票 26：默认上传目录必填——空目录（含纯空白）与多行目录都拒绝。
+#[test]
+fn create_requires_a_single_nonempty_default_upload_dir() {
+    let (_dir, store) = open_store();
+    let project = seed_project(&store, "app");
+    let server = seed_server(&store, "web-1");
+
+    for bad in ["", "   "] {
+        let err = repo::create(
+            &store,
+            &NewTarget {
+                upload_dir: bad.to_string(),
+                ..new_target(project, server)
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, repo::RepoError::EmptyUploadDir), "got {err:?}");
+    }
+    let multiline = repo::create(
+        &store,
+        &NewTarget {
+            upload_dir: "/a\n/b".to_string(),
+            ..new_target(project, server)
+        },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(multiline, repo::RepoError::UploadDirMultiline),
+        "got {multiline:?}"
+    );
+}
+
+/// 票 26：目录两侧空白被规整；update 一样携带并落库默认上传目录。
+#[test]
+fn default_upload_dir_round_trips_through_create_and_update() {
+    let (_dir, store) = open_store();
+    let project = seed_project(&store, "app");
+    let server = seed_server(&store, "web-1");
+
+    let created = repo::create(
+        &store,
+        &NewTarget {
+            upload_dir: "  /srv/app  ".to_string(),
+            ..new_target(project, server)
+        },
+    )
+    .unwrap();
+    assert_eq!(created.upload_dir, "/srv/app");
+
+    let updated = repo::update(
+        &store,
+        &Target {
+            upload_dir: "/srv/other".to_string(),
+            ..created.clone()
+        },
+    )
+    .unwrap();
+    assert_eq!(updated.upload_dir, "/srv/other");
+    assert_eq!(repo::get(&store, created.id).unwrap().unwrap().upload_dir, "/srv/other");
 }
 
 #[test]
@@ -120,11 +183,10 @@ fn command_groups_are_normalized_but_order_preserved() {
     let target = repo::create(
         &store,
         &NewTarget {
-            project_id: project,
-            server_id: server,
             // Blank lines dropped, surrounding whitespace trimmed, order kept.
             start_commands: "\n  cd /home/app  \n\n   \nsh start.sh start\n".to_string(),
             stop_commands: "  \n".to_string(),
+            ..new_target(project, server)
         },
     )
     .unwrap();
@@ -445,6 +507,112 @@ fn migration_v12_backfills_one_unnamed_row_per_existing_target() {
     assert_eq!(rows[0].file_name, "", "legacy row is a 部署时补选 row");
     assert_eq!(rows[0].upload_dir, "/legacy/dir");
     assert_eq!(rows[0].position, 0);
+}
+
+/// 票 26 迁移 v15：目标默认上传目录回填自其**首个映射行**（position 顺序）的
+/// 目录——该列自票 19 起废弃为空，票 26 恢复为业务字段。映射行数据原样保留。
+#[test]
+fn migration_v15_backfills_default_upload_dir_from_the_first_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("test.db");
+
+    {
+        let store = Store::open(&db, TEST_KEY_HEX).unwrap();
+        let project = seed_project(&store, "app");
+        let server = seed_server(&store, "web-1");
+        let with_rows = repo::create(&store, &new_target(project, server)).unwrap();
+        let bare = repo::create(
+            &store,
+            &new_target(project, seed_server(&store, "web-2")),
+        )
+        .unwrap();
+        repo::replace_files(
+            &store,
+            with_rows.id,
+            &[file_row("app.jar", "/srv/one"), file_row("cfg.jar", "/srv/etc")],
+        )
+        .unwrap();
+        // 模拟票 19–25 的真实 v14 形状：upload_dir 列废弃为空、无 v15 回填。
+        store
+            .with(|conn| {
+                conn.execute_batch(&format!(
+                    "PRAGMA user_version = 14;
+                     UPDATE deployment_targets SET upload_dir = '';
+                     UPDATE deployment_targets SET upload_dir = 'pre19' WHERE id = {};",
+                    bare.id
+                ))
+            })
+            .unwrap();
+    }
+
+    let store = Store::open(&db, TEST_KEY_HEX).unwrap();
+    let listed = repo::list_for_project(&store, project_of(&store, "app"));
+    let listed = listed.unwrap();
+    let with_rows = listed.iter().find(|t| t.upload_dir != "pre19").unwrap();
+    assert_eq!(
+        with_rows.upload_dir, "/srv/one",
+        "v15 回填首个映射行（position 顺序）的目录"
+    );
+    let bare = listed.iter().find(|t| t.upload_dir == "pre19").unwrap();
+    assert_eq!(
+        bare.upload_dir, "pre19",
+        "已有值不覆盖；无映射行的目标保持原值"
+    );
+    // 映射行数据原样保留。
+    let rows = repo::list_files(&store, with_rows.id).unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        rows.iter().map(|r| r.file_name.as_str()).collect::<Vec<_>>(),
+        vec!["app.jar", "cfg.jar"]
+    );
+}
+
+/// helper: 按名字查测试项目的 id（v15 迁移测试跨库重开使用）。
+fn project_of(store: &Store, name: &str) -> i64 {
+    store
+        .with(|conn| {
+            conn.query_row(
+                "SELECT id FROM projects WHERE name = ?1",
+                [name],
+                |r| r.get(0),
+            )
+        })
+        .unwrap()
+}
+
+/// 票 26：映射行可选——整组清空（全删）合法，目标仍可保存；行级校验
+/// （目录非空单行、具名文件名不得重复）保持不变。
+#[test]
+fn replace_files_accepts_an_empty_row_set() {
+    let (_dir, store) = open_store();
+    let project = seed_project(&store, "app");
+    let server = seed_server(&store, "web-1");
+    let target = repo::create(&store, &new_target(project, server)).unwrap();
+
+    let rows = repo::replace_files(&store, target.id, &[file_row("a.jar", "/srv/a")]).unwrap();
+    assert_eq!(rows.len(), 1);
+
+    // 全删：映射行集合可以为空（自由勾选时代的预设是可选的）。
+    let rows = repo::replace_files(&store, target.id, &[]).unwrap();
+    assert!(rows.is_empty());
+    assert!(repo::list_files(&store, target.id).unwrap().is_empty());
+
+    // 行级校验不变：空目录 / 多行目录 / 重复具名文件名仍拒绝。
+    let empty = repo::replace_files(&store, target.id, &[file_row("a.jar", "  ")]).unwrap_err();
+    assert!(matches!(empty, repo::RepoError::EmptyUploadDir), "got {empty:?}");
+    let multiline =
+        repo::replace_files(&store, target.id, &[file_row("a.jar", "/a\n/b")]).unwrap_err();
+    assert!(
+        matches!(multiline, repo::RepoError::UploadDirMultiline),
+        "got {multiline:?}"
+    );
+    let dup = repo::replace_files(
+        &store,
+        target.id,
+        &[file_row("a.jar", "/srv/a"), file_row("a.jar", "/srv/b")],
+    )
+    .unwrap_err();
+    assert!(matches!(dup, repo::RepoError::DuplicateFileName(_)), "got {dup:?}");
 }
 
 #[test]

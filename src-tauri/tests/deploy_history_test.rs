@@ -63,6 +63,7 @@ fn seed_target(store: &Store, project_id: i64, server_id: i64) -> i64 {
         &NewTarget {
             project_id,
             server_id,
+            upload_dir: "/srv/app".to_string(),
             start_commands: "sh start.sh".to_string(),
             stop_commands: "sh stop.sh".to_string(),
         },

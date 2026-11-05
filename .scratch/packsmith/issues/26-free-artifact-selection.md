@@ -14,11 +14,13 @@
 
 **Blocked by:** None（基于集成 tip 405f729）
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] 部署对话框逐目标展示全部构件可自由勾选；映射行作预设预勾选
-- [ ] 部署目标编辑恢复默认上传目录（必填），映射行可选；迁移 v15 回填
-- [ ] payload 改 entries{fileName,uploadDir}；后端校验产物归属与目录；rowId 校验移除
-- [ ] 自动连锁行为不变；仅停止/启动只读不回退
-- [ ] 测试：预设解析、自由勾选 payload、迁移回填、后端校验、自动连锁不变
-- [ ] 全套测试绿（cargo 0 警告 / npm / build）
+> 实现：迁移 v15 从首个映射行目录回填 `deployment_targets.upload_dir`（恢复为必填默认上传目录）；部署 payload 改每目标 `entries: [{fileName, uploadDir}]`（预设条目=行目录、自由条目=默认目录，rowId 校验移除，校验产物归属+目录非空）；对话框逐目标展示全部构件自由勾选、映射行作预设（票 24/25 补选 UI 移除、票 21 默认构件预选不再作用于对话框）；自动连锁按映射行预设解析不变。
+
+- [x] 部署对话框逐目标展示全部构件可自由勾选；映射行作预设预勾选
+- [x] 部署目标编辑恢复默认上传目录（必填），映射行可选；迁移 v15 回填
+- [x] payload 改 entries{fileName,uploadDir}；后端校验产物归属与目录；rowId 校验移除
+- [x] 自动连锁行为不变；仅停止/启动只读不回退
+- [x] 测试：预设解析、自由勾选 payload、迁移回填、后端校验、自动连锁不变
+- [x] 全套测试绿（cargo 0 警告 / npm / build）

@@ -206,12 +206,15 @@
     "server": "服务器",
     "serverPlaceholder": "请选择服务器",
     "serverMissing": "服务器 #{{serverId}}（已删除）",
+    "uploadDir": "默认上传目录",
+    "uploadDirHint": "部署对话框自由勾选的构件默认上传到此目录；映射行可选（可全删）",
     "startCommands": "启动命令组",
     "stopCommands": "停止命令组",
     "commandsHint": "每行一条命令，按顺序执行",
     "errors": {
       "serverRequired": "请选择服务器",
-      "uploadDirRequired": "上传目录不能为空",
+      "uploadDirRequired": "默认上传目录不能为空",
+      "rowUploadDirRequired": "上传目录不能为空",
       "uploadDirMultiline": "上传目录只能是一行路径",
       "missing_project": "所属项目不存在",
       "missing_server": "所选服务器不存在，请重新选择",
@@ -219,7 +222,6 @@
       "store": "数据保存失败",
       "unknown": "操作失败：{{message}}",
       "invalid_target": "部署目标不存在或不属于该项目",
-      "rowsRequired": "至少需要一行 文件名→目录 映射",
       "duplicateFileName": "同一文件名不能在映射表中重复出现",
       "empty_upload_dir": "上传目录不能为空",
       "upload_dir_multiline": "上传目录只能是一行路径",
@@ -227,13 +229,13 @@
     },
     "autoDeploy": "构建成功后自动连锁部署",
     "files": {
-      "title": "上传文件 → 目录映射",
+      "title": "预设映射（可选）：构件文件名 → 上传目录",
       "file": "构建产物文件名",
       "dir": "服务器上传目录",
       "addRow": "添加一行",
       "removeRow": "删除",
-      "filePlaceholder": "留空 = 部署时补选",
-      "hint": "每行 = 一个构建产物 → 服务器上传目录；文件名留空表示部署时在部署对话框内补选",
+      "filePlaceholder": "构建产物文件名",
+      "hint": "部署对话框以这些行为预设勾选（具名行沿用行目录）；其余构件上传到默认上传目录；文件名不得重复",
       "unnamed": "（未指定文件）"
     }
   },
@@ -312,7 +314,7 @@
   },
   "deploy": {
     "title": "部署 — {{project}}",
-    "targetTitle": "选择部署目标并确认上传计划（每行 = 构件 → 目录，可勾选）",
+    "targetTitle": "选择部署目标并勾选要上传的构件（可自由勾选本次构建的全部构件）",
     "targetLabel": "部署目标 #{{id}}",
     "noTargets": "该项目还没有部署目标，请先在项目页配置",
     "noArtifacts": "该构建没有入库构件",
@@ -359,24 +361,13 @@
       "artifacts_dir_missing": "该构建没有入库构件",
       "invalid_target": "部署目标无效：{{detail}}",
       "missing_server": "找不到该部署目标对应的服务器",
-      "no_files_selected": "没有勾选任何可上传的行，请至少勾选一行",
-      "invalid_row": "上传计划与目标不匹配，请刷新后重试：{{detail}}"
+      "no_files_selected": "没有勾选任何构件，请至少勾选一个",
+      "empty_upload_dir": "上传目录不能为空：{{detail}}"
     },
     "plan": {
       "file": "构建产物",
       "dir": "上传目录",
-      "unnamedFile": "（未指定文件）",
-      "missingWarning": "产物缺失：本次构建没有该文件，已禁用",
-      "pickLabel": "部署时补选构件",
-      "unspecified": "未指定",
-      "searchArtifacts": "搜索构件…",
-      "noMatchingArtifacts": "没有匹配的构件"
-    },
-    "batch": {
-      "title": "批量补选",
-      "placeholder": "勾选构件，按顺序填入空名行",
-      "apply": "填入空名行",
-      "filledNotice": "已填入 {{filled}} 行，{{extra}} 个构件无处可填"
+      "freeHint": "映射行预设的构件已勾选并沿用行目录；其余构件上传到该目标的默认上传目录"
     }
   },
   "common": {
