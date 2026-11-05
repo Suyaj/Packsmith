@@ -27,6 +27,8 @@ import { listBuildArtifacts, type ArtifactFile } from "@/lib/historyApi";
 import { listServers } from "@/lib/serversApi";
 import { listDeploymentTargets, type Target } from "@/lib/targetsApi";
 import { serverLabel } from "./DeploymentTargetsPanel";
+import { HighlightedText } from "./FuzzyCombobox";
+import { filterBranches } from "@/lib/branchFilter";
 
 /** 每个目标的实时展示状态：状态 + 各阶段输出快照 + 上传进度 + 跳过提示。 */
 type TargetView = {
@@ -92,6 +94,8 @@ function DeployDialog({
   const [running, setRunning] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
+  // 构件列表模糊搜索关键字（票 26 自由勾选列表的过滤，复用分支选择器匹配）
+  const [entryQuery, setEntryQuery] = useState("");
   const deployIdRef = useRef<number | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
 
@@ -121,6 +125,7 @@ function DeployDialog({
       setEntryState(presets);
       setSelectedIds([]);
       setOperation("restart");
+      setEntryQuery("");
       setViews(new Map(targetList.map((target) => [target.id, { ...INITIAL_VIEW, outputs: {}, notices: [] }])));
       setLoadError(null);
     } catch (e) {
@@ -340,6 +345,17 @@ function DeployDialog({
           {uploadsFiles && (
             <p className="text-xs text-muted-foreground">{t("deploy.plan.freeHint")}</p>
           )}
+          {uploadsFiles && names.length > 0 && (
+            <input
+              type="search"
+              data-testid="deploy-entry-search"
+              aria-label={t("deploy.plan.searchArtifacts")}
+              placeholder={t("deploy.plan.searchArtifacts")}
+              value={entryQuery}
+              onChange={(e) => setEntryQuery(e.target.value)}
+              className="mt-1 w-56 rounded-md border bg-background px-2 py-1 text-sm"
+            />
+          )}
           {targets !== null && targets.length === 0 && (
             <p className="text-sm text-muted-foreground">{t("deploy.noTargets")}</p>
           )}
@@ -374,28 +390,40 @@ function DeployDialog({
                       </tr>
                     </thead>
                     <tbody>
-                      {names.map((fileName, index) => (
-                        <tr key={fileName}>
-                          <td className="pr-3">
-                            <label className="flex items-center gap-2">
-                              <input
-                                type="checkbox"
-                                data-testid={`deploy-entry-check-${target.id}-${index}`}
-                                checked={entryState.get(target.id)?.has(fileName) ?? false}
-                                disabled={running || !uploadsFiles}
-                                onChange={() => toggleEntry(target.id, fileName)}
-                              />
-                              <span className="font-mono">{fileName}</span>
-                            </label>
-                          </td>
-                          <td
-                            className="font-mono text-muted-foreground"
-                            data-testid={`deploy-entry-dir-${target.id}-${index}`}
-                          >
-                            {dirFor(target, fileName)}
+                      {filterBranches(names, entryQuery).map(({ branch: fileName, indices }) => {
+                        const index = names.indexOf(fileName);
+                        return (
+                          <tr key={fileName}>
+                            <td className="pr-3">
+                              <label className="flex items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  data-testid={`deploy-entry-check-${target.id}-${index}`}
+                                  checked={entryState.get(target.id)?.has(fileName) ?? false}
+                                  disabled={running || !uploadsFiles}
+                                  onChange={() => toggleEntry(target.id, fileName)}
+                                />
+                                <span className="font-mono">
+                                  <HighlightedText text={fileName} indices={indices} />
+                                </span>
+                              </label>
+                            </td>
+                            <td
+                              className="font-mono text-muted-foreground"
+                              data-testid={`deploy-entry-dir-${target.id}-${index}`}
+                            >
+                              {dirFor(target, fileName)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {entryQuery !== "" && filterBranches(names, entryQuery).length === 0 && (
+                        <tr>
+                          <td colSpan={2} className="py-2 text-muted-foreground">
+                            {t("deploy.plan.noMatchingArtifacts")}
                           </td>
                         </tr>
-                      ))}
+                      )}
                     </tbody>
                   </table>
                 )}

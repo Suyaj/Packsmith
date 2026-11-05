@@ -367,7 +367,9 @@
     "plan": {
       "file": "构建产物",
       "dir": "上传目录",
-      "freeHint": "映射行预设的构件已勾选并沿用行目录；其余构件上传到该目标的默认上传目录"
+      "freeHint": "映射行预设的构件已勾选并沿用行目录；其余构件上传到该目标的默认上传目录",
+      "searchArtifacts": "搜索构件…",
+      "noMatchingArtifacts": "没有匹配的构件"
     }
   },
   "common": {

@@ -190,6 +190,29 @@ describe("DeployDialog（票 26 自由勾选）", () => {
     expect(submit).toBeEnabled();
   });
 
+  it("构件列表模糊搜索：关键字实时过滤并高亮命中片段，清空恢复全量", async () => {
+    render(
+      <DeployDialog projectId={5} projectName="演示项目" historyId={7} open onClose={vi.fn()} />,
+    );
+
+    await screen.findByText("web-1:22 — deploy");
+    const search = screen.getByTestId("deploy-entry-search");
+
+    // 子序列 a-p-p：app-1.0.jar 命中，other-1.0.jar 无 p 不命中。
+    // （高亮会把文件名拆成多个 span，用行数与高亮字符断言而非文本匹配。）
+    await userEvent.type(search, "app");
+    const plan = screen.getByTestId("deploy-plan-1");
+    expect(within(plan).getAllByRole("checkbox")).toHaveLength(1);
+    expect(plan.querySelectorAll("[data-highlight]")).toHaveLength(3);
+
+    // 无匹配提示（每个目标块各一条），清空恢复全量（勾选状态不受过滤影响）。
+    await userEvent.type(search, "zzz");
+    expect(screen.getAllByText("没有匹配的构件").length).toBeGreaterThan(0);
+    await userEvent.clear(search);
+    expect(screen.getByTestId("deploy-plan-1")).toHaveTextContent("app-1.0.jar");
+    expect(screen.getByTestId("deploy-plan-1")).toHaveTextContent("other-1.0.jar");
+  });
+
   it("自由勾选：预设可取消、非预设可勾上，payload entries 携带文件名与目录（自由条目 = 默认目录）", async () => {
     render(
       <DeployDialog projectId={5} projectName="演示项目" historyId={7} open onClose={vi.fn()} />,
