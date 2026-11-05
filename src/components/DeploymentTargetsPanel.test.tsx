@@ -35,11 +35,13 @@ const servers: Server[] = [
   },
 ];
 
-// ticket 19：目标携带 文件名→目录 映射行；含一行空文件名的"部署时补选"行。
+// ticket 19 / 26：目标携带 文件名→目录 映射行（票 26 起为预设、可选）与
+// 必填的默认上传目录。
 const target: Target = {
   id: 1,
   projectId: 5,
   serverId: 11,
+  uploadDir: "/home/app",
   startCommands: "cd /home/app\nsh start.sh start",
   stopCommands: "sh start.sh stop",
   autoDeploy: false,
@@ -85,6 +87,8 @@ describe("部署目标面板", () => {
     expect(files).toHaveTextContent("/home/app");
     expect(files).toHaveTextContent("（未指定文件）");
     expect(files).toHaveTextContent("/srv/pick");
+    // 票 26：目标行展示默认上传目录。
+    expect(screen.getByTestId("target-upload-dir-1")).toHaveTextContent("/home/app");
     expect(screen.getByTestId("target-start-1")).toHaveTextContent(
       /cd \/home\/app\s+sh start\.sh start/,
     );
@@ -99,7 +103,7 @@ describe("部署目标面板", () => {
     expect(await screen.findByText(/尚未配置部署目标/)).toBeInTheDocument();
   });
 
-  it("新建：映射表多行随保存整组提交（可增行）", async () => {
+  it("新建：默认上传目录必填 + 映射表多行随保存整组提交（可增行）", async () => {
     mockBackend({
       create_deployment_target: { ...target, id: 2 },
       targets: [],
@@ -116,10 +120,12 @@ describe("部署目标面板", () => {
     ]);
 
     await userEvent.selectOptions(select, "11");
+    // 默认上传目录（票 26）：必填。
+    await userEvent.type(screen.getByLabelText("默认上传目录"), "/srv/app");
     // 第一行：文件名 → 目录
     await userEvent.type(screen.getByLabelText("构建产物文件名"), "app-1.0.jar");
-    await userEvent.type(screen.getByLabelText("服务器上传目录"), "/home/app");
-    // 添加第二行（空文件名 = 部署时补选），只填目录
+    await userEvent.type(screen.getAllByLabelText("服务器上传目录")[0], "/home/app");
+    // 添加第二行（空文件名 = 不产生预设的旧数据行），只填目录
     await userEvent.click(screen.getByTestId("add-row"));
     await userEvent.type(screen.getAllByLabelText("服务器上传目录")[1], "/srv/pick");
     // 多行命令编辑器：一条命令一行
@@ -133,6 +139,7 @@ describe("部署目标面板", () => {
     expect(expectInvoke("create_deployment_target")).toEqual({
       projectId: 5,
       serverId: 11,
+      uploadDir: "/srv/app",
       files: [
         { fileName: "app-1.0.jar", uploadDir: "/home/app" },
         { fileName: "", uploadDir: "/srv/pick" },
@@ -157,6 +164,7 @@ describe("部署目标面板", () => {
     render(<DeploymentTargetsPanel projectId={5} projectName="demo-app" />);
     await userEvent.click(await screen.findByRole("button", { name: "新建部署目标" }));
     await userEvent.selectOptions(screen.getByLabelText("服务器"), "11");
+    await userEvent.type(screen.getByLabelText("默认上传目录"), "/home/app");
     await userEvent.type(screen.getByLabelText("构建产物文件名"), "app-1.0.jar");
     await userEvent.type(screen.getByLabelText("服务器上传目录"), "/home/app");
     await userEvent.click(screen.getByRole("button", { name: "保存" }));
@@ -164,7 +172,7 @@ describe("部署目标面板", () => {
     expect(await screen.findByText("web-1.example.com:22 — deploy")).toBeInTheDocument();
   });
 
-  it("必填项未填时不允许保存（映射行目录为空 = 不合法）", async () => {
+  it("必填项未填时不允许保存（默认上传目录为空 = 不合法）", async () => {
     mockBackend({ targets: [] });
 
     render(<DeploymentTargetsPanel projectId={5} projectName="demo-app" />);
@@ -173,7 +181,14 @@ describe("部署目标面板", () => {
     expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
 
     await userEvent.selectOptions(screen.getByLabelText("服务器"), "11");
+    // 选了服务器但默认上传目录为空（映射行也留空）：仍不可保存。
     expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
+
+    // 填上默认上传目录 + 一行合法映射行后可保存。
+    await userEvent.type(screen.getByLabelText("默认上传目录"), "/srv/app");
+    await userEvent.type(screen.getByLabelText("构建产物文件名"), "app.jar");
+    await userEvent.type(screen.getByLabelText("服务器上传目录"), "/srv/app");
+    expect(screen.getByRole("button", { name: "保存" })).toBeEnabled();
   });
 
   it("后端映射行校验错误（upload_dir_multiline）以中文提示展示", async () => {
@@ -190,6 +205,7 @@ describe("部署目标面板", () => {
     render(<DeploymentTargetsPanel projectId={5} projectName="demo-app" />);
     await userEvent.click(await screen.findByRole("button", { name: "新建部署目标" }));
     await userEvent.selectOptions(screen.getByLabelText("服务器"), "11");
+    await userEvent.type(screen.getByLabelText("默认上传目录"), "/srv/app");
     await userEvent.type(screen.getByLabelText("构建产物文件名"), "a.jar");
     await userEvent.type(screen.getByLabelText("服务器上传目录"), "/srv/a");
     await userEvent.click(screen.getByRole("button", { name: "保存" }));
@@ -204,6 +220,7 @@ describe("部署目标面板", () => {
     await userEvent.click(await screen.findByRole("button", { name: "新建部署目标" }));
 
     await userEvent.selectOptions(screen.getByLabelText("服务器"), "11");
+    await userEvent.type(screen.getByLabelText("默认上传目录"), "/srv/app");
     await userEvent.type(screen.getByLabelText("构建产物文件名"), "a.jar");
     await userEvent.type(screen.getByLabelText("服务器上传目录"), "/srv/a");
     await userEvent.click(screen.getByTestId("add-row"));
@@ -213,16 +230,25 @@ describe("部署目标面板", () => {
     expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
   });
 
-  it("删光所有映射行时不允许保存（至少一行）", async () => {
-    mockBackend({ targets: [] });
+  // 票 26：映射行可选——删光所有映射行仍可保存（默认上传目录承载自由勾选）。
+  it("删光所有映射行仍可保存（映射行可选）", async () => {
+    mockBackend({
+      targets: [],
+      create_deployment_target: { ...target, files: [] },
+    });
 
     render(<DeploymentTargetsPanel projectId={5} projectName="demo-app" />);
     await userEvent.click(await screen.findByRole("button", { name: "新建部署目标" }));
-
     await userEvent.selectOptions(screen.getByLabelText("服务器"), "11");
+    await userEvent.type(screen.getByLabelText("默认上传目录"), "/srv/app");
     await userEvent.click(screen.getByTestId("remove-row-0"));
-    expect(screen.getByRole("alert")).toHaveTextContent("至少需要一行");
-    expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保存" })).toBeEnabled();
+
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => {
+      expect(expectInvoke("create_deployment_target").files).toEqual([]);
+    });
   });
 
   it("后端错误（duplicate_binding）以中文提示展示", async () => {
@@ -238,6 +264,7 @@ describe("部署目标面板", () => {
     render(<DeploymentTargetsPanel projectId={5} projectName="demo-app" />);
     await userEvent.click(await screen.findByRole("button", { name: "新建部署目标" }));
     await userEvent.selectOptions(screen.getByLabelText("服务器"), "11");
+    await userEvent.type(screen.getByLabelText("默认上传目录"), "/srv/app");
     await userEvent.type(screen.getByLabelText("构建产物文件名"), "app.jar");
     await userEvent.type(screen.getByLabelText("服务器上传目录"), "/home/app");
     await userEvent.click(screen.getByRole("button", { name: "保存" }));
@@ -258,6 +285,7 @@ describe("部署目标面板", () => {
     render(<DeploymentTargetsPanel projectId={5} projectName="demo-app" />);
     await userEvent.click(await screen.findByRole("button", { name: "新建部署目标" }));
     await userEvent.selectOptions(screen.getByLabelText("服务器"), "11");
+    await userEvent.type(screen.getByLabelText("默认上传目录"), "/srv/app");
     await userEvent.type(screen.getByLabelText("构建产物文件名"), "a.jar");
     await userEvent.type(screen.getByLabelText("服务器上传目录"), "/srv/a");
     await userEvent.click(screen.getByRole("button", { name: "保存" }));
@@ -265,12 +293,13 @@ describe("部署目标面板", () => {
     expect(await screen.findByText(/同一文件名在该目标内重复出现/)).toBeInTheDocument();
   });
 
-  it("编辑：表单回填映射行与命令组，update 携带 id 与整组替换的 files", async () => {
+  it("编辑：表单回填默认上传目录、映射行与命令组，update 携带 id 与整组替换的 files", async () => {
     mockBackend({ update_deployment_target: target });
 
     render(<DeploymentTargetsPanel projectId={5} projectName="demo-app" />);
     await userEvent.click(await screen.findByRole("button", { name: "编辑" }));
 
+    expect(screen.getByLabelText("默认上传目录")).toHaveValue("/home/app");
     expect(screen.getByTestId("file-name-0")).toHaveValue("app-1.0.jar");
     expect(screen.getByTestId("upload-dir-0")).toHaveValue("/home/app");
     expect(screen.getByTestId("file-name-1")).toHaveValue("");
@@ -281,6 +310,8 @@ describe("部署目标面板", () => {
     expect(screen.getByLabelText("停止命令组")).toHaveValue("sh start.sh stop");
     expect(screen.getByLabelText("服务器")).toHaveValue("11");
 
+    await userEvent.clear(screen.getByLabelText("默认上传目录"));
+    await userEvent.type(screen.getByLabelText("默认上传目录"), "/srv/def");
     await userEvent.clear(screen.getByTestId("upload-dir-0"));
     await userEvent.type(screen.getByTestId("upload-dir-0"), "/srv/app");
     await userEvent.click(screen.getByRole("button", { name: "保存" }));
@@ -290,6 +321,7 @@ describe("部署目标面板", () => {
     });
     // projectId 必传：缺失时 Tauri 会以 invalid args 拒绝命令，保存静默失败（回归）
     expect(expectInvoke("update_deployment_target").projectId).toBe(5);
+    expect(expectInvoke("update_deployment_target").uploadDir).toBe("/srv/def");
     expect(expectInvoke("update_deployment_target").files).toEqual([
       { fileName: "app-1.0.jar", uploadDir: "/srv/app" },
       { fileName: "", uploadDir: "/srv/pick" },

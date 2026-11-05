@@ -29,6 +29,8 @@ type RowDraft = {
 type FormState = {
   editingId: number | null;
   serverId: string;
+  /** 默认上传目录（票 26）：自由勾选的构件上传到这里。必填。 */
+  uploadDir: string;
   rows: RowDraft[];
   startCommands: string;
   stopCommands: string;
@@ -39,6 +41,7 @@ const EMPTY_ROW: RowDraft = { fileName: "", uploadDir: "" };
 const EMPTY_FORM: FormState = {
   editingId: null,
   serverId: "",
+  uploadDir: "",
   rows: [{ ...EMPTY_ROW }],
   startCommands: "",
   stopCommands: "",
@@ -53,23 +56,34 @@ function isBackendError(e: unknown): e is BackendError {
   return typeof e === "object" && e !== null && "code" in e;
 }
 
-/** 单行上传目录校验：仅一行非空路径（ticket 19 沿用原单目录规则）。 */
-function uploadDirProblem(uploadDir: string): string | null {
+/** 单行上传目录校验：仅一行非空路径（ticket 19 沿用原单目录规则）。
+ * `emptyKey` 区分默认目录与映射行目录的空值文案。 */
+function uploadDirProblem(
+  uploadDir: string,
+  emptyKey: string = "uploadDirRequired",
+): string | null {
   const lines = uploadDir
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line !== "");
-  if (lines.length === 0) return "uploadDirRequired";
+  if (lines.length === 0) return emptyKey;
   if (lines.length > 1) return "uploadDirMultiline";
   return null;
 }
 
-/** 整表校验：每行目录合法、非空文件名不得重复。返回首个问题的 i18n key。 */
+/** 整表校验（票 26）：默认上传目录合法、每行目录合法、非空文件名不得重复。
+ * 映射行可选（可全删）——自由勾选的构件上传到默认上传目录。 */
+function formProblem(f: FormState): string | null {
+  const dirProblem = uploadDirProblem(f.uploadDir);
+  if (dirProblem) return dirProblem;
+  return rowsProblem(f.rows);
+}
+
+/** 映射行校验：每行目录合法、非空文件名不得重复。返回首个问题的 i18n key。 */
 function rowsProblem(rows: RowDraft[]): string | null {
-  if (rows.length === 0) return "rowsRequired";
   const seen = new Set<string>();
   for (const row of rows) {
-    const problem = uploadDirProblem(row.uploadDir);
+    const problem = uploadDirProblem(row.uploadDir, "rowUploadDirRequired");
     if (problem) return problem;
     const name = row.fileName.trim();
     if (name !== "") {
@@ -82,8 +96,9 @@ function rowsProblem(rows: RowDraft[]): string | null {
 
 /**
  * 部署目标面板：一个项目的 项目 × 服务器绑定 CRUD（ticket 09）。
- * ticket 19：上传目录为 文件名→目录 映射表（可增删行）；部署时按行匹配
- * 本次构建的产物并上传到该行的目录。
+ * ticket 19：上传目录为 文件名→目录 映射表（可增删行）。
+ * ticket 26：映射行降级为部署对话框的预设（可选、可全删）；恢复必填的
+ * 默认上传目录字段——自由勾选的构件上传到这里。
  */
 function DeploymentTargetsPanel({
   projectId,
@@ -131,6 +146,7 @@ function DeploymentTargetsPanel({
     setForm({
       editingId: target.id,
       serverId: String(target.serverId),
+      uploadDir: target.uploadDir,
       rows: target.files.map((f) => ({ fileName: f.fileName, uploadDir: f.uploadDir })),
       startCommands: target.startCommands,
       stopCommands: target.stopCommands,
@@ -157,6 +173,7 @@ function DeploymentTargetsPanel({
 
   const formInput = (f: FormState): TargetInput => ({
     serverId: Number.parseInt(f.serverId, 10),
+    uploadDir: f.uploadDir.trim(),
     files: f.rows.map(
       (row): TargetFileInput => ({
         fileName: row.fileName.trim(),
@@ -169,7 +186,7 @@ function DeploymentTargetsPanel({
   });
 
   const formValid = (f: FormState) =>
-    f.serverId !== "" && rowsProblem(f.rows) === null;
+    f.serverId !== "" && formProblem(f) === null;
 
   const handleSave = async () => {
     if (!form) return;
@@ -210,7 +227,7 @@ function DeploymentTargetsPanel({
   const renderRowInput = (row: RowDraft, index: number) => (
     <tr key={index} data-testid={`target-file-row-${index}`}>
       <td className="pr-2">
-        {/* 空文件名 = 部署时补选（旧数据迁移行），用占位提示 */}
+        {/* 空文件名 = 旧数据迁移行（票 26 起不产生预设），用占位提示 */}
         <input
           aria-label={t("targets.files.file")}
           data-testid={`file-name-${index}`}
@@ -245,7 +262,7 @@ function DeploymentTargetsPanel({
   );
 
   const renderForm = (f: FormState) => {
-    const problem = rowsProblem(f.rows);
+    const problem = formProblem(f);
     return (
       <Card className="mt-3" data-testid="target-form">
         <CardHeader>
@@ -272,7 +289,21 @@ function DeploymentTargetsPanel({
               </select>
             </label>
 
-            {/* 文件名→目录 映射表（ticket 19）：每行 = 构建产物文件名 → 服务器上传目录 */}
+            {/* 默认上传目录（票 26）：必填；自由勾选的构件上传到这里 */}
+            <label className="flex flex-col gap-1">
+              {t("targets.uploadDir")}
+              <input
+                aria-label={t("targets.uploadDir")}
+                data-testid="default-upload-dir"
+                value={f.uploadDir}
+                placeholder="/srv/app"
+                onChange={(e) => setForm({ ...f, uploadDir: e.target.value })}
+                className="rounded-md border bg-background px-2 py-1.5 font-mono"
+              />
+              <span className="text-xs text-muted-foreground">{t("targets.uploadDirHint")}</span>
+            </label>
+
+            {/* 预设映射（票 26，可选）：每行 = 构建产物文件名 → 服务器上传目录 */}
             <div className="flex flex-col gap-1">
               <span className="text-sm font-medium">{t("targets.files.title")}</span>
               <table className="w-full">
@@ -399,7 +430,16 @@ function DeploymentTargetsPanel({
                       </Button>
                     </div>
                   </div>
-                  {/* 映射行列表：文件名 → 目录；空名行显示（部署时补选） */}
+                  {/* 映射行列表（票 26 起为预设）：文件名 → 目录；空名行不产生预设 */}
+                  <div className="mt-2 text-sm">
+                    <span>{t("targets.uploadDir")}</span>
+                    <span
+                      data-testid={`target-upload-dir-${target.id}`}
+                      className="ml-2 font-mono text-muted-foreground"
+                    >
+                      {target.uploadDir}
+                    </span>
+                  </div>
                   <table className="mt-2 w-full text-sm" data-testid={`target-files-${target.id}`}>
                     <tbody>
                       {target.files.map((file) => (
