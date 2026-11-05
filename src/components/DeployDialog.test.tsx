@@ -666,6 +666,25 @@ describe("DeployDialog", () => {
     expect(within(list).queryByRole("option")).not.toBeInTheDocument();
   });
 
+  // 下拉不再钉死为触发器宽度（行内触发器窄，长构件名会被截断——用户反馈）：
+  // 最小宽度=触发器，选项不换行可撑开，上限为视口可用宽度。
+  it("补选下拉宽度随内容撑开：最小触发器宽、选项不换行、上限可用宽", async () => {
+    render(
+      <DeployDialog projectId={5} projectName="演示项目" historyId={7} open onClose={vi.fn()} />,
+    );
+
+    await userEvent.click(await screen.findByTestId("deploy-target-1"));
+    await userEvent.click(screen.getByTestId("deploy-row-select-1-102"));
+
+    const list = await screen.findByRole("listbox");
+    const content = list.closest("[data-radix-popper-content-wrapper]")?.firstElementChild ??
+      list.parentElement!;
+    expect(content.className).toContain("min-w-(--radix-popover-trigger-width)");
+    expect(content.className).toContain("max-w-(--radix-popover-content-available-width)");
+    expect(within(list).getAllByRole("option")[0].querySelector("span.whitespace-nowrap"))
+      .not.toBeNull();
+  });
+
   // 批量补选目标：目标 1 一行具名 + 一行空名；目标 2 两行空名。
   const batchTargets: Target[] = [
     {

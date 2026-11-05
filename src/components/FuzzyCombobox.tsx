@@ -87,7 +87,9 @@ function FuzzyCombobox({
           <ChevronsUpDownIcon className="size-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-(--radix-popover-trigger-width) p-0">
+      {/* 最小宽度=触发器；选项不换行、可随内容撑开，上限为视口可用宽度
+          （部署对话框行内触发器窄，长构件名不能被截断——票 24 用户反馈）。 */}
+      <PopoverContent className="min-w-(--radix-popover-trigger-width) w-auto max-w-(--radix-popover-content-available-width) p-0">
         {/* 过滤由前端模糊匹配完成，关闭 cmdk 内置过滤。 */}
         <Command shouldFilter={false}>
           <CommandInput
@@ -116,7 +118,9 @@ function FuzzyCombobox({
                       className="pointer-events-none"
                     />
                   )}
-                  <HighlightedText text={name} indices={indices} />
+                  <span className="whitespace-nowrap">
+                    <HighlightedText text={name} indices={indices} />
+                  </span>
                 </CommandItem>
               );
             })}
