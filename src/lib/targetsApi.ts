@@ -3,12 +3,13 @@
 // `invoke` under the hood; frontend tests mock `@tauri-apps/api/core` and
 // verify these exact payload shapes.
 //
-// ticket 19: 上传目录表格化——目标携带 文件名→目录 映射行 (files)；旧的
-// 单一 uploadDir 字段已废弃，不再出现在接口里。
+// ticket 19: 上传目录表格化——目标携带 文件名→目录 映射行 (files)。
+// ticket 26: 默认上传目录 (uploadDir) 恢复为业务字段（自由勾选的构件上传
+// 到这里，必填）；映射行降级为预设、可选（可全删）。
 
 import { invoke } from "@tauri-apps/api/core";
 
-/** 一行 文件名→上传目录 映射（ticket 19）。fileName 为空 = 部署时补选。 */
+/** 一行 文件名→上传目录 映射（ticket 19；票 26 起为部署对话框的预设）。 */
 export type TargetFile = {
   id: number;
   targetId: number;
@@ -27,16 +28,19 @@ export type Target = {
   id: number;
   projectId: number;
   serverId: number;
+  /** 默认上传目录（票 26）：自由勾选的构件上传到这里。 */
+  uploadDir: string;
   startCommands: string;
   stopCommands: string;
   /** 构建成功后自动连锁部署（ticket 10，默认关）。 */
   autoDeploy: boolean;
-  /** 文件名→上传目录映射行（ticket 19）。 */
+  /** 文件名→上传目录映射行（ticket 19；票 26 起为预设，可选）。 */
   files: TargetFile[];
 };
 
 export type TargetInput = {
   serverId: number;
+  uploadDir: string;
   files: TargetFileInput[];
   startCommands: string;
   stopCommands: string;
@@ -54,6 +58,7 @@ export function createDeploymentTarget(
   return invoke("create_deployment_target", {
     projectId,
     serverId: input.serverId,
+    uploadDir: input.uploadDir,
     files: input.files,
     startCommands: input.startCommands,
     stopCommands: input.stopCommands,
@@ -69,6 +74,7 @@ export function updateDeploymentTarget(
     id,
     projectId,
     serverId: input.serverId,
+    uploadDir: input.uploadDir,
     files: input.files,
     startCommands: input.startCommands,
     stopCommands: input.stopCommands,

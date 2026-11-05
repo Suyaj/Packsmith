@@ -9,12 +9,15 @@
 //! deployments run as detached background tasks and announce themselves via
 //! the `deploy-event` app event (envelope: `{ deployId, event }`).
 //!
-//! ticket 19: the upload set is the target's 文件名→目录 mapping rows
-//! (`deployment_target_files`). The dialog submits per-target row
-//! assignments — the checked, resolvable rows — and the engine uploads
-//! exactly that set (original-filename overwrite into each row's own dir).
+//! ticket 19: the upload set was the target's 文件名→目录 mapping rows.
+//! ticket 26: the dialog upgrades to 自由勾选 — every artifact of this build
+//! is checkable; mapping rows only preset the checked entries (row dir), free
+//! entries upload to the target's default dir. The payload is per-target
+//! `entries: [{fileName, uploadDir}]` — validated against this build's
+//! artifact listing; no row-id checks. Auto-chain keeps its row-based
+//! resolution (预设) unchanged.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicI64, Ordering};
 
@@ -168,21 +171,24 @@ fn artifact_path(artifacts_dir: &str, file_name: &str) -> Result<std::path::Path
     Ok(local_path)
 }
 
-/// One target's row assignments (ticket 19): the dialog submits the checked,
-/// resolvable mapping rows. `files[].file_name` only matters for 空名行
-/// (部署时补选) — named rows always use the file name persisted in the store.
+/// One target's 自由勾选条目 (ticket 26): the dialog submits the checked
+/// artifacts with their upload dirs — preset entries (映射行预设) carry the
+/// row's own dir, free entries the target's default dir. Mapping rows only
+/// preset the dialog on the frontend; the backend never sees row ids.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RowAssignment {
-    pub row_id: i64,
+pub struct DeployEntry {
     pub file_name: String,
+    pub upload_dir: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TargetAssignment {
     pub target_id: i64,
-    pub files: Vec<RowAssignment>,
+    /// 仅停止/仅启动（票 23）时缺省（= 空）：不传文件。
+    #[serde(default)]
+    pub entries: Vec<DeployEntry>,
 }
 
 /// 解析一个目标的映射行（ticket 19 / 21）:
@@ -258,13 +264,33 @@ fn default_for_empty_row(
     (!fallback.is_empty() && artifact_path(artifacts_dir, &fallback).is_ok()).then_some(fallback)
 }
 
-/// 对话框提交的行必须在库内且属于该目标；同一行只能出现一次。
-fn assignment_row_ids_valid(rows: &[targets_repo::TargetFile], files: &[RowAssignment]) -> bool {
-    let known: HashSet<i64> = rows.iter().map(|r| r.id).collect();
-    let mut seen = HashSet::new();
-    files
+/// 解析一个目标提交的自由勾选条目（票 26）: 每个条目的文件名必须在本构建
+/// 产物里（`artifact_not_found`，含路径穿越/空名），目录必须非空
+/// （`empty_upload_dir`）。不校验 rowId——映射行只在前端驱动预设。
+/// Returns the resolved uploads, each with the dir the dialog submitted.
+fn resolve_entries(
+    artifacts_dir: &str,
+    entries: &[DeployEntry],
+) -> Result<Vec<engine::ArtifactRef>, ApiError> {
+    entries
         .iter()
-        .all(|f| known.contains(&f.row_id) && seen.insert(f.row_id))
+        .map(|entry| {
+            let upload_dir = entry.upload_dir.trim().to_string();
+            if upload_dir.is_empty() {
+                return Err(ApiError::raw(
+                    "empty_upload_dir",
+                    format!("entry {:?}: upload dir must not be empty", entry.file_name),
+                ));
+            }
+            let file_name = entry.file_name.trim().to_string();
+            let local_path = artifact_path(artifacts_dir, &file_name)?;
+            Ok(engine::ArtifactRef {
+                local_path,
+                file_name,
+                upload_dir,
+            })
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -282,11 +308,10 @@ pub async fn start_deploy(
         ));
     }
     let store = (*app.state::<Store>()).clone();
-    // 上传相关的校验（构建成功、产物目录、行归属/产物解析）只对会传文件的
-    // 操作生效（ticket 23）：仅停止/仅启动只需要目标选择仍然有效。
+    // 上传相关的校验（构建成功、产物目录、条目解析）只对会传文件的操作生效
+    // （ticket 23）：仅停止/仅启动只需要目标选择仍然有效。
     let uploads = operation.runs_upload();
 
-    let mut notices: Vec<(i64, String)> = Vec::new();
     let jobs = {
         let entry = history::list(&store, None)?
             .into_iter()
@@ -318,35 +343,10 @@ pub async fn start_deploy(
         }
         let mut jobs = resolve_jobs(&store, entry.project_id, &target_ids)?;
         if let Some(artifacts_dir) = artifacts_dir {
-            // Per-target mapping rows: every assigned row must belong to its
-            // target; every uploaded file must exist in this build's artifact
-            // listing (strict — the dialog already disables missing rows).
-            let rows = targets_repo::files_for_targets(&store, &target_ids)
-                .map_err(|e| ApiError::raw("store", e.to_string()))?;
+            // 自由勾选条目（票 26）：逐条校验产物归属与目录非空，按条目提交的
+            // 目录上传（预设条目 = 行目录，自由条目 = 目标默认目录）。
             for assignment in &assignments {
-                let rows: Vec<targets_repo::TargetFile> = rows
-                    .iter()
-                    .filter(|r| r.target_id == assignment.target_id)
-                    .cloned()
-                    .collect();
-                if !assignment_row_ids_valid(&rows, &assignment.files) {
-                    return Err(ApiError::raw(
-                        "invalid_row",
-                        "an assignment row does not belong to its target (or is duplicated)",
-                    ));
-                }
-                let picks: HashMap<i64, String> = assignment
-                    .files
-                    .iter()
-                    .map(|f| (f.row_id, f.file_name.clone()))
-                    .collect();
-                let (artifacts, skipped) =
-                    resolve_target_rows(&rows, &artifacts_dir, &picks, true, &[], None)?;
-                notices.extend(
-                    skipped
-                        .into_iter()
-                        .map(|message| (assignment.target_id, message)),
-                );
+                let artifacts = resolve_entries(&artifacts_dir, &assignment.entries)?;
                 let job = jobs
                     .iter_mut()
                     .find(|j| j.target_id == assignment.target_id)
@@ -356,7 +356,7 @@ pub async fn start_deploy(
             if jobs.iter().all(|j| j.artifacts.is_empty()) {
                 return Err(ApiError::raw(
                     "no_files_selected",
-                    "no resolvable upload rows in the assignments",
+                    "no upload entries in the assignments",
                 ));
             }
         }
@@ -373,9 +373,6 @@ pub async fn start_deploy(
         // 前端靠它取消进行中的部署。
         let _ = on_event.send(AutoDeployEvent::envelope(deploy_id, event));
     };
-    for (target_id, message) in notices {
-        sink(DeployEvent::Skipped { target_id, message });
-    }
     let summary = engine::run_deploy(
         DeployPlan {
             operation,
@@ -795,32 +792,73 @@ mod tests {
         assert_eq!(skipped.len(), 2, "空名行与缺失行都要有跳过提示");
     }
 
-    /// 提交的行必须真实存在且属于该目标（防跨目标/伪造行 id）。
+    // ---- 票 26：部署 payload 改为每目标自由勾选条目 entries{fileName,uploadDir}
+    // ----（映射行只在前端驱动预设，rowId 校验移除）。
+
+    fn entry(file_name: &str, upload_dir: &str) -> DeployEntry {
+        DeployEntry {
+            file_name: file_name.to_string(),
+            upload_dir: upload_dir.to_string(),
+        }
+    }
+
+    /// 自由勾选条目按提交原样解析：文件名必须在本构建产物里，目录按条目
+    /// （预设条目 = 行目录，自由条目 = 目标默认目录），原文件名覆盖上传。
     #[test]
-    fn assignment_row_ids_must_belong_to_the_target_and_be_unique() {
-        let rows = vec![row(1, 10, "a.jar", "/srv/a")];
-        let ok = vec![RowAssignment {
-            row_id: 1,
-            file_name: String::new(),
-        }];
-        assert!(assignment_row_ids_valid(&rows, &ok));
+    fn resolve_entries_maps_checked_entries_to_uploads_with_their_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.jar"), b"x").unwrap();
+        std::fs::write(dir.path().join("b.jar"), b"x").unwrap();
+        let dir_str = dir.path().to_str().unwrap();
 
-        let foreign = vec![RowAssignment {
-            row_id: 99,
-            file_name: String::new(),
-        }];
-        assert!(!assignment_row_ids_valid(&rows, &foreign));
+        let artifacts =
+            resolve_entries(dir_str, &[entry("a.jar", "/srv/row"), entry("b.jar", "/srv/default")])
+                .unwrap();
+        assert_eq!(artifacts.len(), 2);
+        assert_eq!(artifacts[0].file_name, "a.jar");
+        assert_eq!(artifacts[0].upload_dir, "/srv/row");
+        assert_eq!(artifacts[0].local_path, dir.path().join("a.jar"));
+        assert_eq!(artifacts[1].file_name, "b.jar");
+        assert_eq!(artifacts[1].upload_dir, "/srv/default");
 
-        let duplicated = vec![
-            RowAssignment {
-                row_id: 1,
-                file_name: String::new(),
-            },
-            RowAssignment {
-                row_id: 1,
-                file_name: String::new(),
-            },
-        ];
-        assert!(!assignment_row_ids_valid(&rows, &duplicated));
+        // 目录两侧空白规整；空条目列表合法（该目标没有勾选任何构件）。
+        let artifacts =
+            resolve_entries(dir_str, &[entry("a.jar", "  /srv/x  ")]).unwrap();
+        assert_eq!(artifacts[0].upload_dir, "/srv/x");
+        assert!(resolve_entries(dir_str, &[]).unwrap().is_empty());
+    }
+
+    /// 校验：文件名不在本次构建产物里 → `artifact_not_found`（含路径穿越与
+    /// 空名）；目录为空（含纯空白）→ `empty_upload_dir`。
+    #[test]
+    fn resolve_entries_rejects_unknown_artifacts_and_empty_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.jar"), b"x").unwrap();
+        let dir_str = dir.path().to_str().unwrap();
+
+        for bad_name in ["missing.jar", "", "../evil.jar", "sub/dir.jar"] {
+            let err = resolve_entries(dir_str, &[entry(bad_name, "/srv/a")]).unwrap_err();
+            assert_eq!(err.code(), "artifact_not_found", "case {bad_name:?}");
+        }
+        for bad_dir in ["", "   "] {
+            let err = resolve_entries(dir_str, &[entry("a.jar", bad_dir)]).unwrap_err();
+            assert_eq!(err.code(), "empty_upload_dir", "case {bad_dir:?}");
+        }
+    }
+
+    /// 线上形状（golden）：部署 payload 每目标 `{ targetId, entries:
+    /// [{fileName, uploadDir}] }`，camelCase；仅停止/仅启动时 entries 可缺省。
+    #[test]
+    fn target_assignment_deserializes_from_the_frontend_payload() {
+        let json = r#"{"targetId":1,"entries":[{"fileName":"a.jar","uploadDir":"/srv/a"}]}"#;
+        let parsed: TargetAssignment = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.target_id, 1);
+        assert_eq!(parsed.entries.len(), 1);
+        assert_eq!(parsed.entries[0].file_name, "a.jar");
+        assert_eq!(parsed.entries[0].upload_dir, "/srv/a");
+
+        let stop_only: TargetAssignment = serde_json::from_str(r#"{"targetId":2}"#).unwrap();
+        assert_eq!(stop_only.target_id, 2);
+        assert!(stop_only.entries.is_empty());
     }
 }

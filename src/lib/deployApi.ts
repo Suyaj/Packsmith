@@ -79,20 +79,20 @@ export type DeploySummary = {
 };
 
 /**
- * 发起部署（票 19 上传计划确认 / 票 23 操作选择）：`operation` 为对话框级
- * 操作；仅重启/仅上传时每个目标提交其勾选且可解析的文件名→目录映射行
- * （上传集合 = 勾选集合，原文件名覆盖，传到各自行目录），仅停止/仅启动时
- * `files` 为空、只按目标执行命令组。`fileName` 仅对空名行（部署时补选）
- * 有意义——具名行以后端库内文件名为准。
+ * 发起部署（票 26 自由勾选 / 票 23 操作选择）：`operation` 为对话框级操作；
+ * 仅重启/仅上传时每个目标提交其勾选的条目 `entries`（预设条目目录 = 映射行
+ * 目录，自由条目目录 = 目标默认上传目录；原文件名覆盖上传），仅停止/仅启动
+ * 时 `entries` 缺省/为空、只按目标执行命令组。rowId 不再提交——映射行只在
+ * 前端驱动预设勾选。
  */
-export type RowAssignment = {
-  rowId: number;
+export type DeployEntry = {
   fileName: string;
+  uploadDir: string;
 };
 
 export type TargetAssignment = {
   targetId: number;
-  files: RowAssignment[];
+  entries: DeployEntry[];
 };
 
 export function startDeploy(
