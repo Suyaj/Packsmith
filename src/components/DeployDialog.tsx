@@ -1,10 +1,11 @@
-// 部署对话框（ticket 10 / 19 / 23 / 24）：确认解析后的上传计划——每个部署目标
-// 逐行展示其 文件名→目录 映射行（可勾选；产物缺失的行禁用+标红警告；空文件名行
-// 内联补选，cmdk 可搜索 Combobox），上传集合 = 勾选集合。批量补选（票 24）：
-// 一次勾选多个构件按 目标顺序→行顺序 填入空名行，多出构件提示。对话框级操作
-// 选择（重启/仅上传/仅停止/仅启动，票 23）：仅停止/仅启动时上传计划区只读展示、
-// payload 只带目标；依次部署；展示各目标阶段状态、跳过提示与输出快照；重启时
-// 停止失败中止重启并提供"单独执行启动命令组"；部署进行中可取消。
+// 部署对话框（ticket 10 / 19 / 23 / 24 / 25）：确认解析后的上传计划——每个部署
+// 目标逐行展示其 文件名→目录 映射行（可勾选；产物缺失的行禁用+标红警告），
+// 上传集合 = 勾选集合。空名行（部署时补选）只读展示补选结果，未填显示
+// 「未指定」（票 25）；批量补选是唯一填充入口（票 24）：一次勾选多个构件按
+// 目标顺序→行顺序填入空名行，重复执行按序覆盖重填，多出构件提示。对话框级
+// 操作选择（重启/仅上传/仅停止/仅启动，票 23）：仅停止/仅启动时上传计划区
+// 只读展示、payload 只带目标；依次部署；展示各目标阶段状态、跳过提示与输出
+// 快照；重启时停止失败中止重启并提供"单独执行启动命令组"；部署进行中可取消。
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -240,9 +241,10 @@ function DeployDialog({
     0,
   );
 
-  /** 批量补选确认（票 24）：按勾选顺序填入各目标空名行（目标顺序 → 目标内
-   * 行顺序），填入行默认勾选；构件多于空名行时多出的忽略并提示。只改本次
-   * 部署的补选值，不改映射行集合；具名行不参与。 */
+  /** 批量补选确认（票 24，票 25 起为唯一填充入口）：按勾选顺序填入各目标
+   * 空名行（目标顺序 → 目标内行顺序），填入行默认勾选；重复执行按序覆盖
+   * 重填（取代票 24 的逐行覆盖）；构件多于空名行时多出的忽略并提示。只改
+   * 本次部署的补选值，不改映射行集合；具名行不参与。 */
   const applyBatchFill = () => {
     if (batchPicks.length === 0) return;
     const emptyRowIds: number[] = [];
@@ -501,29 +503,15 @@ function DeployDialog({
                                 </span>
                               )}
                               {unnamed && !missing && (
-                                // 票 24：补选升级为可搜索 Combobox（与打包面板
-                                // 选择器同款模糊过滤 + 命中高亮），单选选中即收起。
-                                <FuzzyCombobox
-                                  items={names}
-                                  selected={pick ? [pick] : []}
-                                  onSelect={(name) =>
-                                    setRowState((prev) => {
-                                      const next = new Map(prev);
-                                      const current = prev.get(row.id) ?? { checked, pick: "" };
-                                      next.set(row.id, { ...current, pick: name });
-                                      return next;
-                                    })
-                                  }
-                                  disabled={running || !uploadsFiles}
-                                  ariaLabel={t("deploy.plan.pickLabel")}
-                                  searchPlaceholder={t("deploy.plan.searchArtifacts")}
-                                  emptyText={t("deploy.plan.noMatchingArtifacts")}
-                                  renderValue={() =>
-                                    pick || t("deploy.plan.pickPlaceholder")
-                                  }
-                                  className="ml-2 h-7 max-w-56 px-2 text-xs"
-                                  testId={`deploy-row-select-${target.id}-${row.id}`}
-                                />
+                                // 票 25：空名行只读展示当前补选结果（批量补选是
+                                // 唯一填充入口），未填时显示「未指定」。
+                                <span
+                                  data-testid={`deploy-row-pick-${target.id}-${row.id}`}
+                                  className="ml-2 font-mono text-xs text-muted-foreground"
+                                  title={t("deploy.plan.pickLabel")}
+                                >
+                                  {pick.trim() !== "" ? pick : t("deploy.plan.unspecified")}
+                                </span>
                               )}
                             </td>
                             <td className="font-mono text-muted-foreground">{row.uploadDir}</td>

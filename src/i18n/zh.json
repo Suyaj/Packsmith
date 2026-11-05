@@ -368,7 +368,7 @@
       "unnamedFile": "（未指定文件）",
       "missingWarning": "产物缺失：本次构建没有该文件，已禁用",
       "pickLabel": "部署时补选构件",
-      "pickPlaceholder": "选择构件…",
+      "unspecified": "未指定",
       "searchArtifacts": "搜索构件…",
       "noMatchingArtifacts": "没有匹配的构件"
     },
