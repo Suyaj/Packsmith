@@ -50,13 +50,14 @@ jobs:
         run: npm run tauri build
 
       # bundle targets 为 all：macOS 产出 app/dmg，Windows 产出 msi/nsis
+      # （产物位于 target/<target|release>/release/bundle/ 下）
       - name: 收集构建产物
         uses: actions/upload-artifact@v4
         with:
           name: packsmith-${{ matrix.os }}-${{ matrix.target }}
           path: |
-            src-tauri/target/${{ matrix.target }}/bundle/dmg/*.dmg
-            src-tauri/target/${{ matrix.target }}/bundle/macos/*.app
-            src-tauri/target/*/bundle/msi/*.msi
-            src-tauri/target/*/bundle/nsis/*.exe
+            src-tauri/target/*/release/bundle/dmg/*.dmg
+            src-tauri/target/*/release/bundle/macos/*.app
+            src-tauri/target/*/release/bundle/msi/*.msi
+            src-tauri/target/*/release/bundle/nsis/*.exe
           if-no-files-found: error
