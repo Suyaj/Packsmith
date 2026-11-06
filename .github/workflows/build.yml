@@ -68,14 +68,34 @@ jobs:
             src-tauri/target/**/bundle/nsis/*.exe
           if-no-files-found: error
 
-      # 仅打 v* 标签时发布：安装包挂到 GitHub Releases（.app 是目录不上传，
-      # mac 分发走 dmg）。首个 push 会自动创建该 tag 对应的 Release。
+      # 仅打 v* 标签时：把安装包以 Artifact 带给发布作业（.app 是目录不上传，
+      # mac 分发走 dmg）。统一由 release 作业创建 Release，避免双作业竞态。
       - name: 发布到 Releases
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: actions/upload-artifact@v4
         with:
-          generate_release_notes: true
-          files: |
+          name: release-${{ matrix.os }}-${{ matrix.target }}
+          path: |
             src-tauri/target/**/bundle/dmg/*.dmg
             src-tauri/target/**/bundle/msi/*.msi
             src-tauri/target/**/bundle/nsis/*.exe
+          if-no-files-found: error
+
+  # 打 v* 标签时：等双平台构建完成后，统一创建 Release 并挂上安装包。
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: 汇集双平台安装包
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+
+      - name: 创建 Release 并上传安装包
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/*
