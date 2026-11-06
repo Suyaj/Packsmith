@@ -1,0 +1,56 @@
+[package]
+name = "packsmith"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+edition = "2024"
+license = "GPL-3.0-only"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "packsmith_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+time = { version = "0.3.55", features = ["formatting"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "stream"] }
+futures-util = "0.3.34"
+thiserror = "2"
+which = "8.0.6"
+tar = "0.4.46"
+flate2 = "1.1.10"
+tokio = { version = "1", features = ["fs", "macros", "rt-multi-thread", "net", "io-util", "time", "process"] }
+zip = { version = "9.2.2", default-features = false, features = ["deflate"] }
+rusqlite = { version = "0.41", features = [
+  "bundled-sqlcipher",
+  "bundled-sqlcipher-vendored-openssl",
+] }
+keyring = { version = "4", features = ["v1"] }
+rand = { version = "0.9", features = ["os_rng"] }
+russh = "0.65"
+git2 = { version = "0.20", default-features = false, features = ["https"] }
+russh-sftp = "3"
+async-trait = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+
+
+# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true

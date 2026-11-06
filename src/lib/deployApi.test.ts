@@ -1,0 +1,98 @@
+// 部署执行 API（ticket 10）：typed boundary tests — every call is `invoke`
+// with these exact payload shapes, and events flow through a Channel.
+
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const invokeMock = vi.fn();
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: (...args: unknown[]) => invokeMock(...args),
+  // Minimal Channel stand-in: the dialog/API just pass it through.
+  Channel: class {
+    onmessage: ((msg: unknown) => void) | null = null;
+  },
+}));
+
+import {
+  cancelDeploy,
+  runStartGroup,
+  setTargetAutoDeploy,
+  startDeploy,
+  type AutoDeployMessage,
+  type DeployOperation,
+} from "./deployApi";
+
+beforeEach(() => {
+  invokeMock.mockReset();
+});
+
+describe("deployApi", () => {
+  // 票 26：payload 改为每目标自由勾选条目 entries{fileName, uploadDir}
+  // （预设条目 = 行目录，自由条目 = 目标默认目录）；rowId 不再提交。
+  it.each(["restart", "upload", "stop", "start"] as DeployOperation[])(
+    "start_deploy 携带历史 id、操作（%s）与逐目标的 entries",
+    async (operation) => {
+      invokeMock.mockResolvedValue({ cancelled: false, targets: [] });
+      const onEvent = { onmessage: null } as never;
+      await startDeploy(
+        7,
+        operation,
+        [
+          { targetId: 1, entries: [{ fileName: "app-1.0.jar", uploadDir: "/srv/app" }] },
+          { targetId: 2, entries: [] },
+        ],
+        onEvent,
+      );
+
+      expect(invokeMock).toHaveBeenCalledWith("start_deploy", {
+        historyId: 7,
+        operation,
+        assignments: [
+          { targetId: 1, entries: [{ fileName: "app-1.0.jar", uploadDir: "/srv/app" }] },
+          { targetId: 2, entries: [] },
+        ],
+        onEvent,
+      });
+    },
+  );
+
+  it("cancel_deploy 携带 deployId", async () => {
+    invokeMock.mockResolvedValue(true);
+    await cancelDeploy(42);
+    expect(invokeMock).toHaveBeenCalledWith("cancel_deploy", { deployId: 42 });
+  });
+
+  it("run_start_group 单独执行启动命令组", async () => {
+    invokeMock.mockResolvedValue({ cancelled: false, targets: [] });
+    const onEvent = { onmessage: null } as never;
+    await runStartGroup(3, onEvent);
+    expect(invokeMock).toHaveBeenCalledWith("run_start_group", {
+      targetId: 3,
+      onEvent,
+    });
+  });
+
+  it("set_target_auto_deploy 切换自动连锁开关", async () => {
+    invokeMock.mockResolvedValue(true);
+    await setTargetAutoDeploy(9, true);
+    expect(invokeMock).toHaveBeenCalledWith("set_target_auto_deploy", {
+      id: 9,
+      enabled: true,
+    });
+  });
+
+  it("自动连锁事件信封保留 deployId 与事件本体", () => {
+    const message: AutoDeployMessage = {
+      deployId: 5,
+      event: {
+        type: "target_finished",
+        target_id: 1,
+        status: "failed",
+        stop_failed: true,
+        error: null,
+      },
+    };
+    expect(message.deployId).toBe(5);
+    expect(message.event.type).toBe("target_finished");
+  });
+});

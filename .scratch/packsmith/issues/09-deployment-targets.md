@@ -4,7 +4,7 @@
 
 **Blocked by:** 04, 05
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] 可为项目创建/编辑/删除部署目标
 - [ ] 上传目录与两个命令组均多行编辑，保存后回显正确

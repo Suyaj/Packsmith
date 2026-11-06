@@ -4,7 +4,7 @@
 
 **Blocked by:** 08, 09
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] 部署后服务器上传目录出现同名新构件（覆盖旧文件）
 - [ ] 重启走通：停止 → 启动，两阶段输出均可见

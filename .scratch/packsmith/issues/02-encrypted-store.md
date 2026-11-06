@@ -4,7 +4,7 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] 首次启动自动建库 + 密钥入钥匙串，用户无感知
 - [ ] 写入测试数据 → 重启应用仍在
