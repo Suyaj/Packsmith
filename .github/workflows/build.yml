@@ -1,0 +1,62 @@
+# 打包流水线：代码合并到 main 时触发，构建 Windows 与 macOS 安装包。
+# 构建产物以 Artifact 形式上传（未配置签名，产物为未签名安装包）。
+name: build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # 支持在 Actions 页手动触发
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest # Apple Silicon（aarch64）
+            target: aarch64-apple-darwin
+          - os: windows-latest # x64
+            target: x86_64-pc-windows-msvc
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust 编译缓存
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: 安装前端依赖
+        run: npm ci
+
+      - name: 构建（macOS）
+        if: matrix.os == 'macos-latest'
+        run: npm run tauri build -- --target ${{ matrix.target }}
+
+      - name: 构建（Windows）
+        if: matrix.os == 'windows-latest'
+        run: npm run tauri build
+
+      # bundle targets 为 all：macOS 产出 app/dmg，Windows 产出 msi/nsis
+      - name: 收集构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: packsmith-${{ matrix.os }}-${{ matrix.target }}
+          path: |
+            src-tauri/target/${{ matrix.target }}/bundle/dmg/*.dmg
+            src-tauri/target/${{ matrix.target }}/bundle/macos/*.app
+            src-tauri/target/*/bundle/msi/*.msi
+            src-tauri/target/*/bundle/nsis/*.exe
+          if-no-files-found: error
