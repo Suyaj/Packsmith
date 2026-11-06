@@ -20,7 +20,7 @@ Packsmith 是一个打包的桌面应用（当前支持 Java 打包，后续支�
 
 ### Issue tracker
 
-Issues live as local markdown files under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
+Issues live in GitHub Issues (`Suyaj/Packsmith`), managed via the `gh` CLI. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
