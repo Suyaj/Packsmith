@@ -33,3 +33,18 @@ export function downloadTool(
 ): Promise<ToolStatus> {
   return invoke<ToolStatus>("toolchain_download", { tool, onProgress });
 }
+
+// 下载代理（票 27）：显式配置 > 环境变量 > 直连；仅作用于托管工具链下载。
+
+export function fetchToolchainProxy(): Promise<string | null> {
+  return invoke<string | null>("toolchain_proxy_get");
+}
+
+export function saveToolchainProxy(proxyUrl: string): Promise<void> {
+  return invoke("toolchain_proxy_set", { proxyUrl });
+}
+
+/** 经给定代理 HEAD https://github.com，返回耗时毫秒。 */
+export function testToolchainProxy(proxyUrl: string): Promise<number> {
+  return invoke<number>("toolchain_proxy_test", { proxyUrl });
+}

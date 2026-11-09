@@ -409,7 +409,14 @@ fn add_three_commits(source_repo: &Path) {
         let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
         let sig = git2::Signature::now(name, email).unwrap();
         let oid = repo
-            .commit(Some("refs/heads/main"), &sig, &sig, message, &tree, &[&parent])
+            .commit(
+                Some("refs/heads/main"),
+                &sig,
+                &sig,
+                message,
+                &tree,
+                &[&parent],
+            )
             .unwrap();
         parent = repo.find_commit(oid).unwrap();
     }
@@ -486,7 +493,9 @@ async fn 克隆完成后推送所选分支最新3条提交_位于构建日志之
         .iter()
         .rposition(|e| matches!(e, BuildEvent::Clone { .. }))
         .unwrap();
-    let first_log = ordered.iter().position(|e| matches!(e, BuildEvent::Log { .. }));
+    let first_log = ordered
+        .iter()
+        .position(|e| matches!(e, BuildEvent::Log { .. }));
     let commits_pos = pos(&|e| matches!(e, BuildEvent::Commits { .. }));
     assert!(commits_pos > last_clone, "commits after clone progress");
     assert!(

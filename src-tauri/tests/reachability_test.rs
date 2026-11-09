@@ -14,7 +14,12 @@ async fn a_listening_port_is_reachable() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
 
-    let result = tcp_probe(addr.ip().to_string().as_str(), addr.port(), Duration::from_secs(2)).await;
+    let result = tcp_probe(
+        addr.ip().to_string().as_str(),
+        addr.port(),
+        Duration::from_secs(2),
+    )
+    .await;
 
     assert!(result.is_ok(), "expected reachable, got {result:?}");
 }
@@ -27,7 +32,12 @@ async fn a_closed_port_is_unreachable_with_a_detail() {
         listener.local_addr().unwrap()
     };
 
-    let result = tcp_probe(addr.ip().to_string().as_str(), addr.port(), Duration::from_secs(2)).await;
+    let result = tcp_probe(
+        addr.ip().to_string().as_str(),
+        addr.port(),
+        Duration::from_secs(2),
+    )
+    .await;
 
     let detail = result.expect_err("closed port must be unreachable");
     assert!(!detail.is_empty(), "unreachable must carry a detail");

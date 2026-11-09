@@ -275,6 +275,16 @@
         "git": "Git",
         "jdk": "JDK（默认 1.8）",
         "mvnd": "mvnd"
+      },
+      "proxy": {
+        "title": "下载代理",
+        "description": "托管工具链下载使用的 HTTP 代理（票 27）。留空 = 直连；不读取系统代理。保存后对下一次下载生效，代理失败不会回退直连。",
+        "placeholder": "http://127.0.0.1:7890",
+        "test": "测试连接",
+        "testing": "测试中…",
+        "testOk": "连接成功（{{ms}} ms）",
+        "save": "保存",
+        "saved": "已保存"
       }
     },
     "closeBehavior": {

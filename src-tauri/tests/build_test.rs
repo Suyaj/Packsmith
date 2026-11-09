@@ -82,7 +82,8 @@ fn list_branches_returns_live_remote_branch_names_without_heads_or_tags() {
     let dir = tempfile::tempdir().unwrap();
     let fixture = fixture_repo(dir.path(), "upstream");
 
-    let mut branches = packsmith_lib::build::list_branches(fixture.to_str().unwrap(), None).unwrap();
+    let mut branches =
+        packsmith_lib::build::list_branches(fixture.to_str().unwrap(), None).unwrap();
     branches.sort();
 
     assert_eq!(
@@ -112,7 +113,8 @@ fn list_branches_sees_branches_added_after_the_fixture_was_created() {
         .unwrap();
     repo.branch("release/2.0", &head, false).unwrap();
 
-    let mut branches = packsmith_lib::build::list_branches(fixture.to_str().unwrap(), None).unwrap();
+    let mut branches =
+        packsmith_lib::build::list_branches(fixture.to_str().unwrap(), None).unwrap();
     branches.sort();
     assert!(branches.contains(&"release/2.0".to_string()));
 }
@@ -352,5 +354,8 @@ fn list_branches_with_configured_credentials_still_works_for_local_fixture() {
     let mut branches =
         packsmith_lib::build::list_branches(fixture.to_str().unwrap(), creds.as_ref()).unwrap();
     branches.sort();
-    assert_eq!(branches, vec!["feature/search".to_string(), "main".to_string()]);
+    assert_eq!(
+        branches,
+        vec!["feature/search".to_string(), "main".to_string()]
+    );
 }

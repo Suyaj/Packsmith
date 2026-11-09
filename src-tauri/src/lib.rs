@@ -24,6 +24,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             toolchain::toolchain_status,
             toolchain::toolchain_download,
+            toolchain::toolchain_proxy_get,
+            toolchain::toolchain_proxy_set,
+            toolchain::toolchain_proxy_test,
             commands::list_projects,
             commands::clone_project,
             commands::import_project,

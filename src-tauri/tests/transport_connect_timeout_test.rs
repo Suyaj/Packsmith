@@ -51,11 +51,10 @@ async fn connect_to_a_silent_server_errors_within_the_timeout() {
 
     let started = Instant::now();
     // 外层 20s 兜底：若连接超时回归（永远悬着），测试在 20s 内红掉而不是挂死。
-    let result =
-        tokio::time::timeout(Duration::from_secs(20), async {
-            SshTransport::connect_with_timeout(&conn, Duration::from_secs(1)).await
-        })
-        .await;
+    let result = tokio::time::timeout(Duration::from_secs(20), async {
+        SshTransport::connect_with_timeout(&conn, Duration::from_secs(1)).await
+    })
+    .await;
     let elapsed = started.elapsed();
 
     let err = match result {

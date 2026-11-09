@@ -264,9 +264,14 @@ async fn run_connection_test(
     request: TestRequest,
     accept_unknown_host_key: bool,
 ) -> Result<TestOutcomeDto, String> {
-    let stored_fingerprint =
-        repo::known_host_fingerprint(store, &request.host, request.port).map_err(|e| e.to_string())?;
-    let outcome = ssh::test_connection(&request, stored_fingerprint.as_deref(), accept_unknown_host_key).await;
+    let stored_fingerprint = repo::known_host_fingerprint(store, &request.host, request.port)
+        .map_err(|e| e.to_string())?;
+    let outcome = ssh::test_connection(
+        &request,
+        stored_fingerprint.as_deref(),
+        accept_unknown_host_key,
+    )
+    .await;
     // Persist a fingerprint the user explicitly accepted during this test.
     if let TestOutcome::Success {
         new_fingerprint: Some(ref fingerprint),
@@ -305,16 +310,19 @@ pub struct ReachabilityDto {
 /// 不含 SSH 认证——完整测试用服务器管理页的连接测试。
 #[tauri::command]
 pub async fn check_server_reachable(host: String, port: u16) -> Result<ReachabilityDto, String> {
-    Ok(match super::reachability::tcp_probe(&host, port, super::reachability::PROBE_TIMEOUT).await {
-        Ok(()) => ReachabilityDto {
-            reachable: true,
-            detail: None,
+    Ok(
+        match super::reachability::tcp_probe(&host, port, super::reachability::PROBE_TIMEOUT).await
+        {
+            Ok(()) => ReachabilityDto {
+                reachable: true,
+                detail: None,
+            },
+            Err(detail) => ReachabilityDto {
+                reachable: false,
+                detail: Some(detail),
+            },
         },
-        Err(detail) => ReachabilityDto {
-            reachable: false,
-            detail: Some(detail),
-        },
-    })
+    )
 }
 
 /// 最近成功部署时间（首页服务器卡片）：每台已知服务器一行，从未部署为 null。

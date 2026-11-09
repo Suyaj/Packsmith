@@ -175,7 +175,10 @@ fn git_account_round_trips_username_and_token() {
     set_git_username(&store, "octocat").unwrap();
     set_git_token(&store, "ghp_secret-token-123").unwrap();
 
-    assert_eq!(get_git_username(&store).unwrap().as_deref(), Some("octocat"));
+    assert_eq!(
+        get_git_username(&store).unwrap().as_deref(),
+        Some("octocat")
+    );
     assert_eq!(
         get_git_token(&store).unwrap().as_deref(),
         Some("ghp_secret-token-123")
@@ -193,7 +196,10 @@ fn git_account_persists_across_reopen() {
         set_git_token(&store, "token-1").unwrap();
     }
     let store = open(&db);
-    assert_eq!(get_git_username(&store).unwrap().as_deref(), Some("octocat"));
+    assert_eq!(
+        get_git_username(&store).unwrap().as_deref(),
+        Some("octocat")
+    );
     assert_eq!(get_git_token(&store).unwrap().as_deref(), Some("token-1"));
 }
 
@@ -203,7 +209,10 @@ fn set_git_username_trims_whitespace() {
     let store = open(&dir.path().join("test.db"));
 
     set_git_username(&store, "  octocat  ").unwrap();
-    assert_eq!(get_git_username(&store).unwrap().as_deref(), Some("octocat"));
+    assert_eq!(
+        get_git_username(&store).unwrap().as_deref(),
+        Some("octocat")
+    );
 }
 
 #[test]

@@ -586,10 +586,7 @@ fn gradle_cannot_be_created_via_git_record() {
     )
     .unwrap_err();
 
-    assert!(matches!(
-        err,
-        ProjectError::UnsupportedCreationType(_)
-    ));
+    assert!(matches!(err, ProjectError::UnsupportedCreationType(_)));
     assert_eq!(err.code(), "unsupported_project_type");
     assert!(projects::list(&store).unwrap().is_empty());
 }
@@ -646,7 +643,10 @@ fn clone_repo_rejects_ssh_urls_upfront() {
     ] {
         let err = projects::clone_repo(url, &dest, None, &mut |_| {}, &new_cancel_flag(), None)
             .unwrap_err();
-        assert!(matches!(err, ProjectError::SshNotSupported(_)), "url: {url}");
+        assert!(
+            matches!(err, ProjectError::SshNotSupported(_)),
+            "url: {url}"
+        );
         assert_eq!(err.code(), "ssh_not_supported");
         assert!(!dest.exists(), "SSH URL 拒绝时不留半成品目录");
     }
@@ -677,4 +677,3 @@ fn clone_and_register_with_configured_credentials_succeeds_against_local_fixture
     assert!(workspace.join("auth-cloned").join("README.md").exists());
     assert_eq!(project.name, "auth-cloned");
 }
-

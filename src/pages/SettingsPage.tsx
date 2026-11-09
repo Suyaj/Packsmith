@@ -12,7 +12,10 @@ import {
 } from "@/components/ui/card";
 import {
   downloadTool,
+  fetchToolchainProxy,
   fetchToolchainStatus,
+  saveToolchainProxy,
+  testToolchainProxy,
   ProgressEvent,
   ToolKind,
   ToolStatus,
@@ -160,6 +163,103 @@ function ToolRow({
         )}
       </div>
     </li>
+  );
+}
+
+/**
+ * 下载代理（ticket 27）：托管工具链下载的 HTTP 代理配置。优先级为显式配置 >
+ * 环境变量 > 直连；配置了代理失败不回退直连（ADR-0004）。测试连接验证的是
+ * 输入框当前值，不依赖是否已保存。
+ */
+function ProxyCard() {
+  const { t } = useTranslation();
+  const [value, setValue] = useState<string>("");
+  const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [testOk, setTestOk] = useState<string | null>(null);
+  const [testError, setTestError] = useState<string | null>(null);
+
+  useEffect(() => {
+    // 读取失败不阻塞页面：视为未配置代理。返回值非字符串（异常形状）同样视为未配置。
+    fetchToolchainProxy()
+      .then((url) => setValue(typeof url === "string" ? url : ""))
+      .catch(() => {});
+  }, []);
+
+  async function handleSave() {
+    setSaveError(null);
+    setSaved(false);
+    try {
+      await saveToolchainProxy(value);
+      setSaved(true);
+    } catch (e) {
+      setSaveError(String(e));
+    }
+  }
+
+  async function handleTest() {
+    setTestError(null);
+    setTestOk(null);
+    setTesting(true);
+    try {
+      const ms = await testToolchainProxy(value);
+      setTestOk(t("settings.toolchain.proxy.testOk", { ms }));
+    } catch (e) {
+      setTestError(String(e));
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  return (
+    <Card className="mt-4">
+      <CardHeader>
+        <CardTitle>{t("settings.toolchain.proxy.title")}</CardTitle>
+        <CardDescription>{t("settings.toolchain.proxy.description")}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="flex items-center gap-3">
+          <input
+            type="text"
+            placeholder={t("settings.toolchain.proxy.placeholder")}
+            aria-label={t("settings.toolchain.proxy.title")}
+            value={value}
+            onChange={(e) => {
+              setValue(e.target.value);
+              setSaved(false);
+            }}
+            className="w-80 rounded-md border bg-background px-2 py-1.5"
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleTest}
+            disabled={testing || value.trim() === ""}
+          >
+            {testing ? t("settings.toolchain.proxy.testing") : t("settings.toolchain.proxy.test")}
+          </Button>
+          <Button size="sm" variant="outline" onClick={handleSave}>
+            {t("settings.toolchain.proxy.save")}
+          </Button>
+          {saved && (
+            <span role="status" className="text-sm">
+              {t("settings.toolchain.proxy.saved")}
+            </span>
+          )}
+        </div>
+        {testOk && (
+          <p role="status" className="mt-2 text-sm">
+            {testOk}
+          </p>
+        )}
+        {(saveError || testError) && (
+          <p role="alert" className="mt-2 text-sm text-destructive">
+            {saveError ?? testError}
+          </p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -714,6 +814,7 @@ function SettingsPage() {
           </p>
         </CardContent>
       </Card>
+      <ProxyCard />
       <RetentionCard />
       <CloseBehaviorCard />
       <GitAccountCard />
