@@ -626,3 +626,79 @@ describe("设置页：mvnd settings.xml（票 18）", () => {
     );
   });
 });
+
+describe("设置页：下载代理", () => {
+  const PROXY_PLACEHOLDER = "http://127.0.0.1:7890";
+
+  function proxyCard(): HTMLElement {
+    return screen
+      .getByText("下载代理")
+      .closest('[data-slot="card"]') as HTMLElement;
+  }
+
+  it("加载已保存代理并保存修改", async () => {
+    const user = userEvent.setup();
+    mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
+      if (cmd === "toolchain_status") return fixtureStatuses;
+      if (cmd === "toolchain_proxy_get") return "http://127.0.0.1:7890";
+      if (cmd === "toolchain_proxy_set") {
+        expect((args as { proxyUrl: string }).proxyUrl).toBe(
+          "http://127.0.0.1:7891",
+        );
+        return null;
+      }
+      throw new Error(`unexpected command ${cmd}`);
+    });
+    render(<SettingsPage />);
+
+    const input = within(proxyCard()).getByLabelText("下载代理");
+    await waitFor(() => expect(input).toHaveValue("http://127.0.0.1:7890"));
+    await user.clear(input);
+    await user.type(input, "http://127.0.0.1:7891");
+    await user.click(within(proxyCard()).getByRole("button", { name: "保存" }));
+
+    expect(await within(proxyCard()).findByText("已保存")).toBeInTheDocument();
+  });
+
+  it("测试连接成功展示耗时", async () => {
+    const user = userEvent.setup();
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "toolchain_status") return fixtureStatuses;
+      if (cmd === "toolchain_proxy_get") return null;
+      if (cmd === "toolchain_proxy_test") return 42;
+      throw new Error(`unexpected command ${cmd}`);
+    });
+    render(<SettingsPage />);
+
+    const input = within(proxyCard()).getByLabelText("下载代理");
+    await user.type(input, PROXY_PLACEHOLDER);
+    await user.click(
+      within(proxyCard()).getByRole("button", { name: "测试连接" }),
+    );
+
+    expect(
+      await within(proxyCard()).findByText(/连接成功（42 ms）/),
+    ).toBeInTheDocument();
+  });
+
+  it("测试连接失败展示错误信息", async () => {
+    const user = userEvent.setup();
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "toolchain_status") return fixtureStatuses;
+      if (cmd === "toolchain_proxy_get") return null;
+      if (cmd === "toolchain_proxy_test") throw new Error("代理拒绝连接");
+      throw new Error(`unexpected command ${cmd}`);
+    });
+    render(<SettingsPage />);
+
+    const input = within(proxyCard()).getByLabelText("下载代理");
+    await user.type(input, PROXY_PLACEHOLDER);
+    await user.click(
+      within(proxyCard()).getByRole("button", { name: "测试连接" }),
+    );
+
+    expect(
+      await within(proxyCard()).findByText(/代理拒绝连接/),
+    ).toBeInTheDocument();
+  });
+});

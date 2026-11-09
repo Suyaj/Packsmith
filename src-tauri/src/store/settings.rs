@@ -7,6 +7,7 @@
 //! Git 令牌从不回传前端明文（掩码模式：编辑留空=保持不变，见命令层）。
 //! mvnd settings.xml（ticket 18）内容同样入加密库，由命令层物化为
 //! `<appdata>/mvnd-settings.xml`（构建 spawn 从磁盘读取）。
+//! 工具链下载代理 URL（ticket 27）为普通 KV（非机密），空 = 不使用代理。
 
 use rusqlite::OptionalExtension;
 
@@ -128,6 +129,33 @@ pub fn set_mvnd_settings_xml(store: &Store, content: &str) -> Result<(), StoreEr
 /// 清除 mvnd settings.xml 内容。
 pub fn clear_mvnd_settings_xml(store: &Store) -> Result<(), StoreError> {
     remove(store, MVND_SETTINGS_XML_KEY)
+}
+
+// ---------------------------------------------------------------------------
+// 工具链下载代理 (ticket 27)
+// ---------------------------------------------------------------------------
+
+/// 工具链下载代理 URL（如 `http://127.0.0.1:7890`）。空/未设置 = 不使用代理。
+pub const TOOLCHAIN_PROXY_URL_KEY: &str = "toolchain_proxy_url";
+
+/// 读取工具链下载代理 URL；未设置为 `None`。
+pub fn get_toolchain_proxy_url(store: &Store) -> Result<Option<String>, StoreError> {
+    get(store, TOOLCHAIN_PROXY_URL_KEY)
+}
+
+/// 写入工具链下载代理 URL（去首尾空白；空白即视为清除；非空必须是
+/// `http://`/`https://` 开头的 URL——下载层只支持 HTTP(S) 代理，票 27 决策）。
+pub fn set_toolchain_proxy_url(store: &Store, url: &str) -> Result<(), StoreError> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return remove(store, TOOLCHAIN_PROXY_URL_KEY);
+    }
+    if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
+        return Err(StoreError::InvalidSetting(format!(
+            "代理地址必须以 http:// 或 https:// 开头，got {trimmed}"
+        )));
+    }
+    set(store, TOOLCHAIN_PROXY_URL_KEY, trimmed)
 }
 
 fn remove(store: &Store, key: &str) -> Result<(), StoreError> {

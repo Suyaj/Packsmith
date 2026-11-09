@@ -1,9 +1,11 @@
 //! 流式下载：带进度回调，落盘到指定文件。
 //!
-//! 连接策略：hyper 不做 happy-eyeballs——对解析出的多个地址只连第一个，
-//! 而本机网络会封锁 github.com 的部分地址（curl 能连上、reqwest 超时）。
-//! 因此自行解析地址并逐个回退；连接超时 8s/地址。传输中途断流则按
-//! HTTP Range 断点续传。
+//! 连接策略（票 27，ADR-0004）：代理优先级为设置页显式配置 > 环境变量
+//! （reqwest 默认读取 `https_proxy`/`all_proxy`）> 直连。配置了代理（显式或
+//! env）就走普通 client，**不回退直连**；未配置代理时走逐地址直连回退——
+//! hyper 不做 happy-eyeballs，对解析出的多个地址只连第一个，而本机网络会
+//! 封锁 github.com 的部分地址（curl 能连上、reqwest 超时），因此自行解析
+//! 地址并逐个回退；连接超时 8s/地址。传输中途断流则按 HTTP Range 断点续传。
 
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::Path;
@@ -14,8 +16,55 @@ use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
 use crate::toolchain::error::ToolchainError;
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
+pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_ADDRS: usize = 5;
+
+/// 下载连接策略（票 27）：代理解析结果，一次下载解析一次、贯穿始终。
+#[derive(Debug, Clone)]
+pub enum DownloadProxy {
+    /// 设置页显式配置的代理 URL。失败不回退直连（显式配置说明直连不通）。
+    Explicit(reqwest::Proxy),
+    /// 环境变量代理（`https_proxy`/`all_proxy`）：交给 reqwest 默认处理。
+    Env,
+    /// 无代理：逐地址直连回退。
+    Direct,
+}
+
+impl DownloadProxy {
+    /// 解析代理：显式配置 > 环境变量 > 直连。
+    pub fn resolve(configured: Option<&str>) -> Result<Self, ToolchainError> {
+        Self::resolve_with(configured, &|name| {
+            std::env::var(name).ok().filter(|v| !v.trim().is_empty())
+        })
+    }
+
+    /// 同 [`resolve`](Self::resolve)，env 读取可注入（测试用）。
+    fn resolve_with(
+        configured: Option<&str>,
+        env: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<Self, ToolchainError> {
+        if let Some(url) = configured.map(str::trim).filter(|s| !s.is_empty()) {
+            // 仅支持 HTTP(S) 代理（票 27 决策）；reqwest 对 Proxy::all 的解析
+            // 很宽松（"not-a-url" 也能过），协议前缀在这里显式把关。
+            if !(url.starts_with("http://") || url.starts_with("https://")) {
+                return Err(ToolchainError::Http(format!(
+                    "代理地址必须以 http:// 或 https:// 开头：{url}"
+                )));
+            }
+            let proxy = reqwest::Proxy::all(url)
+                .map_err(|e| ToolchainError::Http(format!("代理地址非法：{e}")))?;
+            return Ok(Self::Explicit(proxy));
+        }
+        // 与 reqwest 的 env 代理检测对齐：all_proxy 优先，https_proxy 次之
+        //（大小写都查）。检测到就走普通 client，由 reqwest 读 env。
+        for name in ["all_proxy", "ALL_PROXY", "https_proxy", "HTTPS_PROXY"] {
+            if env(name).is_some() {
+                return Ok(Self::Env);
+            }
+        }
+        Ok(Self::Direct)
+    }
+}
 
 /// 拆出 (host, port)。官方源一律 https；http 仅放行环回地址（测试用）。
 fn host_port(url: &str) -> Result<(String, u16), ToolchainError> {
@@ -56,9 +105,47 @@ async fn resolve_addrs(host: &str, port: u16) -> Result<Vec<SocketAddr>, Toolcha
     .map_err(|e: std::io::Error| ToolchainError::Http(format!("域名解析失败：{e}")))
 }
 
-/// 逐地址回退的 GET。连接级失败换下一个地址；HTTP 状态错误不重试
-///（交由调用方按业务处理）。`range_from` 为 Some 时带 Range 头。
+/// 按 [`DownloadProxy`] 策略发起 GET。代理路径（显式/env）不解析本地
+/// DNS、不做逐地址回退——连接目标由代理决定；直连路径逐地址回退。
+/// HTTP 状态错误不重试（交由调用方按业务处理）。`range_from` 为 Some 时带
+/// Range 头。
 async fn send_get_inner(
+    url: &str,
+    range_from: Option<u64>,
+    proxy: &DownloadProxy,
+) -> Result<reqwest::Response, ToolchainError> {
+    let mut request = match proxy {
+        // 显式代理：no_proxy() 关掉 env 代理检测，保证只用用户配的这一个
+        DownloadProxy::Explicit(p) => {
+            let client = reqwest::Client::builder()
+                .connect_timeout(CONNECT_TIMEOUT)
+                .no_proxy()
+                .proxy(p.clone())
+                .build()
+                .map_err(|e| ToolchainError::Http(format!("{e}")))?;
+            client.get(url)
+        }
+        // env 代理：reqwest 默认读取；不做本地 DNS 解析（代理端解析）
+        DownloadProxy::Env => {
+            let client = reqwest::Client::builder()
+                .connect_timeout(CONNECT_TIMEOUT)
+                .build()
+                .map_err(|e| ToolchainError::Http(format!("{e}")))?;
+            client.get(url)
+        }
+        DownloadProxy::Direct => return send_get_direct(url, range_from).await,
+    };
+    if let Some(offset) = range_from {
+        request = request.header(reqwest::header::RANGE, format!("bytes={offset}-"));
+    }
+    request
+        .send()
+        .await
+        .map_err(|e| ToolchainError::Http(format!("{e}")))
+}
+
+/// 逐地址回退的直连 GET。连接级失败换下一个地址。
+async fn send_get_direct(
     url: &str,
     range_from: Option<u64>,
 ) -> Result<reqwest::Response, ToolchainError> {
@@ -89,18 +176,20 @@ async fn send_get_inner(
     )))
 }
 
-async fn send_get(url: &str) -> Result<reqwest::Response, ToolchainError> {
-    send_get_inner(url, None).await
+async fn send_get(url: &str, proxy: &DownloadProxy) -> Result<reqwest::Response, ToolchainError> {
+    send_get_inner(url, None, proxy).await
 }
 
 /// 下载 `url` 到 `dest`，每个数据块回调（已接收字节, 总字节）。
 /// 返回总接收字节数。进度值是单调递增的累计值，供前端计算百分比。
+/// `proxy` 为本次下载的连接策略（下载开始前解析一次）。
 ///
 /// 网络抖动下的韧性：连接失败按 send_get 的尝试序列重试；传输中途断流
 /// 则用 HTTP Range 从已收字节断点续传（服务器不支持 Range 时整段重来）。
 pub async fn download_to<F>(
     url: &str,
     dest: &Path,
+    proxy: &DownloadProxy,
     mut on_progress: F,
 ) -> Result<u64, ToolchainError>
 where
@@ -129,10 +218,10 @@ where
                 file.set_len(0).await?;
                 file.seek(std::io::SeekFrom::Start(0)).await?;
             }
-            send_get(url).await?
+            send_get(url, proxy).await?
         } else {
             // 断点续传
-            send_get_range(url, received).await?
+            send_get_range(url, received, proxy).await?
         };
         match response.status() {
             reqwest::StatusCode::PARTIAL_CONTENT => { /* 续传：追加写入 */ }
@@ -190,8 +279,12 @@ where
 }
 
 /// 带断点续传请求头的 GET（期望 206 Partial Content）。
-async fn send_get_range(url: &str, offset: u64) -> Result<reqwest::Response, ToolchainError> {
-    send_get_inner(url, Some(offset)).await
+async fn send_get_range(
+    url: &str,
+    offset: u64,
+    proxy: &DownloadProxy,
+) -> Result<reqwest::Response, ToolchainError> {
+    send_get_inner(url, Some(offset), proxy).await
 }
 
 #[cfg(test)]
@@ -211,9 +304,14 @@ mod tests {
             "https://github.com/apache/maven-mvnd/releases/download/1.0.6/maven-mvnd-1.0.6-src.zip";
 
         let mut calls = 0;
-        let received = download_to(url, &dest, |_, _| calls += 1)
-            .await
-            .expect("真实下载小文件");
+        let received = download_to(
+            url,
+            &dest,
+            &DownloadProxy::resolve(None).expect("代理解析"),
+            |_, _| calls += 1,
+        )
+        .await
+        .expect("真实下载小文件");
 
         let bytes = std::fs::read(&dest).unwrap();
         assert_eq!(received as usize, bytes.len());
@@ -221,5 +319,52 @@ mod tests {
         assert!(bytes.len() > 800 * 1024); // 完整源码包
         assert_eq!(&bytes[..2], b"PK"); // zip 魔数
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn no_env(_: &str) -> Option<String> {
+        None
+    }
+
+    #[test]
+    fn 代理解析_显式配置优先于环境变量() {
+        let env_all = |name: &str| (!name.starts_with("all_proxy")).then(|| "http://env:1".into());
+        // 显式配置存在时 env 一律忽略
+        assert!(matches!(
+            DownloadProxy::resolve_with(Some("http://cfg:1"), &env_all).unwrap(),
+            DownloadProxy::Explicit(_)
+        ));
+    }
+
+    #[test]
+    fn 代理解析_环境变量命中走env() {
+        let with_env = |name: &str| (name == "all_proxy").then(|| "http://env:1".into());
+        assert!(matches!(
+            DownloadProxy::resolve_with(None, &with_env).unwrap(),
+            DownloadProxy::Env
+        ));
+        // reqwest 检测对齐：https_proxy 大写也能命中
+        let with_upper = |name: &str| (name == "HTTPS_PROXY").then(|| "http://env:1".into());
+        assert!(matches!(
+            DownloadProxy::resolve_with(None, &with_upper).unwrap(),
+            DownloadProxy::Env
+        ));
+    }
+
+    #[test]
+    fn 代理解析_无配置无环境变量走直连() {
+        assert!(matches!(
+            DownloadProxy::resolve_with(None, &no_env).unwrap(),
+            DownloadProxy::Direct
+        ));
+        // 空串/空白配置视同未配置
+        assert!(matches!(
+            DownloadProxy::resolve_with(Some("  "), &no_env).unwrap(),
+            DownloadProxy::Direct
+        ));
+    }
+
+    #[test]
+    fn 代理解析_非法代理地址报错() {
+        assert!(DownloadProxy::resolve_with(Some("not-a-url"), &no_env).is_err());
     }
 }

@@ -21,6 +21,14 @@ pub enum ToolchainError {
     Io(#[from] std::io::Error),
     #[error("{0} 正在下载中，请等待完成")]
     Busy(String),
+    #[error("本地存储操作失败：{0}")]
+    Store(String),
+}
+
+impl From<crate::store::StoreError> for ToolchainError {
+    fn from(e: crate::store::StoreError) -> Self {
+        Self::Store(e.to_string())
+    }
 }
 
 impl Serialize for ToolchainError {

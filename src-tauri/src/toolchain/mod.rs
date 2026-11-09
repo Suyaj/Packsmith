@@ -16,6 +16,7 @@ mod state;
 mod status;
 
 use std::collections::HashSet;
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
@@ -96,8 +97,15 @@ pub async fn toolchain_download(
 ) -> Result<ToolStatusView, ToolchainError> {
     guard_slot_acquire(&app, tool)?;
     let root = tools_root(&app)?;
+    // 代理策略在下载开始前解析一次，贯穿整个下载（票 27）：
+    // 显式配置 > 环境变量 > 直连，配了代理失败不回退直连。
+    let configured_proxy = {
+        let store = app.state::<crate::store::Store>();
+        crate::store::settings::get_toolchain_proxy_url(&store)?
+    };
+    let proxy = download::DownloadProxy::resolve(configured_proxy.as_deref())?;
     let channel = on_progress.clone();
-    let result = install::install_tool(tool, &root, move |event| {
+    let result = install::install_tool(tool, &root, &proxy, move |event| {
         // 进度事件推送失败不影响安装本身（前端可能已关闭页面）。
         let _ = channel.send(event);
     })
@@ -107,6 +115,56 @@ pub async fn toolchain_download(
 
     let state = status::compute_status(tool, &root);
     Ok(status_view(tool, state))
+}
+
+// ---------------------------------------------------------------------------
+// 工具链下载代理（票 27）
+// ---------------------------------------------------------------------------
+
+/// 读取工具链下载代理 URL（未设置为 `null`；空串不会持久化）。
+#[tauri::command]
+pub fn toolchain_proxy_get(app: AppHandle) -> Result<Option<String>, ToolchainError> {
+    let store = app.state::<crate::store::Store>();
+    Ok(crate::store::settings::get_toolchain_proxy_url(&store)?)
+}
+
+/// 保存工具链下载代理 URL（空/空白即清除；非空须为 http(s) URL）。
+#[tauri::command]
+pub fn toolchain_proxy_set(app: AppHandle, proxy_url: String) -> Result<(), ToolchainError> {
+    let store = app.state::<crate::store::Store>();
+    Ok(crate::store::settings::set_toolchain_proxy_url(
+        &store, &proxy_url,
+    )?)
+}
+
+/// 测试代理连通性（设置页"测试连接"按钮）：对 `https://github.com` 发 HEAD
+/// 请求，成功返回耗时毫秒。始终用入参代理——测试的是**输入框当前值**，不
+/// 依赖是否已保存。
+#[tauri::command]
+pub async fn toolchain_proxy_test(proxy_url: String) -> Result<u64, ToolchainError> {
+    const TEST_URL: &str = "https://github.com";
+    const TOTAL_TIMEOUT: Duration = Duration::from_secs(15);
+    let url = proxy_url.trim();
+    if url.is_empty() {
+        return Err(ToolchainError::Http("代理地址为空".to_string()));
+    }
+    let proxy =
+        reqwest::Proxy::all(url).map_err(|e| ToolchainError::Http(format!("代理地址非法：{e}")))?;
+    let client = reqwest::Client::builder()
+        .connect_timeout(download::CONNECT_TIMEOUT)
+        .timeout(TOTAL_TIMEOUT)
+        .no_proxy()
+        .proxy(proxy)
+        .build()
+        .map_err(|e| ToolchainError::Http(format!("{e}")))?;
+    let started = std::time::Instant::now();
+    client
+        .head(TEST_URL)
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| ToolchainError::Http(format!("经代理连接 {TEST_URL} 失败：{e}")))?;
+    Ok(started.elapsed().as_millis() as u64)
 }
 
 #[cfg(test)]

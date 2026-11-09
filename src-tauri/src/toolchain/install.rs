@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use crate::toolchain::archive::extract_archive;
 use crate::toolchain::catalog::{ArchiveFormat, ToolKind, ToolSource, current_source};
-use crate::toolchain::download::download_to;
+use crate::toolchain::download::{DownloadProxy, download_to};
 use crate::toolchain::error::ToolchainError;
 use crate::toolchain::status::{find_executable_in, register_managed};
 
@@ -31,10 +31,11 @@ pub enum Phase {
 }
 
 /// 安装一个工具到 `tools_root`。完成后状态文件登记，UI 刷新为已托管。
-/// 返回安装的版本号。
+/// 返回安装的版本号。`proxy` 为本次下载的连接策略（票 27）。
 pub async fn install_tool(
     kind: ToolKind,
     tools_root: &Path,
+    proxy: &DownloadProxy,
     on_progress: impl FnMut(ProgressEvent) + Send,
 ) -> Result<String, ToolchainError> {
     let source = current_source(kind).ok_or_else(|| ToolchainError::NoSourceForPlatform {
@@ -42,7 +43,7 @@ pub async fn install_tool(
         os: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(),
     })?;
-    install_from(kind, tools_root, &source, on_progress).await
+    install_from(kind, tools_root, &source, proxy, on_progress).await
 }
 
 /// 按给定安装包来源安装（测试可指向本地服务，覆盖 catalog 查表）。
@@ -50,6 +51,7 @@ pub async fn install_from(
     kind: ToolKind,
     tools_root: &Path,
     source: &ToolSource,
+    proxy: &DownloadProxy,
     mut on_progress: impl FnMut(ProgressEvent) + Send,
 ) -> Result<String, ToolchainError> {
     cleanup_stale(tools_root, kind)?;
@@ -63,7 +65,7 @@ pub async fn install_from(
     let archive_path = tools_root.join(".downloads").join(&file_name);
     let url = source.url.clone();
 
-    download_to(&url, &archive_path, &mut |received, total| {
+    download_to(&url, &archive_path, proxy, &mut |received, total| {
         on_progress(ProgressEvent {
             tool: kind,
             phase: Phase::Downloading,
@@ -223,7 +225,7 @@ mod tests {
         let tools_root = temp_root("nosource");
         std::fs::create_dir_all(&tools_root).unwrap();
 
-        let result = install_tool(ToolKind::Git, &tools_root, |_| {}).await;
+        let result = install_tool(ToolKind::Git, &tools_root, &DownloadProxy::Direct, |_| {}).await;
         assert!(matches!(
             result.unwrap_err(),
             ToolchainError::NoSourceForPlatform { .. }
@@ -262,7 +264,8 @@ mod tests {
             if let Some(mode) = mode {
                 options = options.unix_permissions(mode);
             }
-            zip.start_file("maven-mvnd-1.0.6-darwin-aarch64/bin/mvnd", options).unwrap();
+            zip.start_file("maven-mvnd-1.0.6-darwin-aarch64/bin/mvnd", options)
+                .unwrap();
             std::io::Write::write_all(&mut zip, b"#!/bin/sh\necho mvnd").unwrap();
             zip.finish().unwrap();
         }
@@ -290,9 +293,15 @@ mod tests {
         };
 
         let mut events = Vec::new();
-        let version = install_from(ToolKind::Mvnd, &tools_root, &source, |e| events.push(e))
-            .await
-            .expect("本地全链路安装");
+        let version = install_from(
+            ToolKind::Mvnd,
+            &tools_root,
+            &source,
+            &DownloadProxy::Direct,
+            |e| events.push(e),
+        )
+        .await
+        .expect("本地全链路安装");
 
         assert_eq!(version, "1.0.6");
         assert_eq!(
@@ -332,9 +341,15 @@ mod tests {
             strip_top: true,
         };
 
-        install_from(ToolKind::Mvnd, &tools_root, &source, |_| {})
-            .await
-            .expect("modeless 安装应自愈成功");
+        install_from(
+            ToolKind::Mvnd,
+            &tools_root,
+            &source,
+            &DownloadProxy::Direct,
+            |_| {},
+        )
+        .await
+        .expect("modeless 安装应自愈成功");
 
         use std::os::unix::fs::PermissionsExt;
         let mode = std::fs::metadata(tools_root.join("mvnd/bin/mvnd"))
@@ -378,9 +393,11 @@ mod tests {
         std::fs::create_dir_all(&tools_root).unwrap();
 
         let mut phases = Vec::new();
-        let version = install_tool(ToolKind::Mvnd, &tools_root, |e| phases.push(e.phase))
-            .await
-            .expect("真实下载安装 mvnd");
+        let version = install_tool(ToolKind::Mvnd, &tools_root, &DownloadProxy::Direct, |e| {
+            phases.push(e.phase)
+        })
+        .await
+        .expect("真实下载安装 mvnd");
 
         assert_eq!(version, "1.0.6");
         assert!(tools_root.join("mvnd/bin/mvnd").is_file());
