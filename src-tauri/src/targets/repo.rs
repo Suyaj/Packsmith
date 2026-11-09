@@ -74,8 +74,7 @@ pub fn normalize_commands(text: &str) -> String {
     split_command_group(text).join("\n")
 }
 
-const SELECT_COLUMNS: &str =
-    "id, project_id, server_id, upload_dir, start_commands, stop_commands, auto_deploy, last_artifact";
+const SELECT_COLUMNS: &str = "id, project_id, server_id, upload_dir, start_commands, stop_commands, auto_deploy, last_artifact";
 
 fn row_to_target(row: &rusqlite::Row<'_>) -> rusqlite::Result<Target> {
     Ok(Target {
@@ -220,14 +219,15 @@ pub fn list_files(store: &Store, target_id: i64) -> Result<Vec<TargetFile>, Repo
 
 /// Lists the mapping rows of several targets at once (grouped by the caller
 /// via [`TargetFile::target_id`]), display order within each target.
-pub fn files_for_targets(
-    store: &Store,
-    target_ids: &[i64],
-) -> Result<Vec<TargetFile>, RepoError> {
+pub fn files_for_targets(store: &Store, target_ids: &[i64]) -> Result<Vec<TargetFile>, RepoError> {
     if target_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let placeholders = target_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+    let placeholders = target_ids
+        .iter()
+        .map(|_| "?")
+        .collect::<Vec<_>>()
+        .join(", ");
     let params: Vec<i64> = target_ids.to_vec();
     Ok(store.with(|conn| {
         let mut stmt = conn.prepare(&format!(
@@ -404,7 +404,10 @@ impl std::fmt::Display for RepoError {
                 write!(f, "an upload dir must be a single line")
             }
             RepoError::DuplicateFileName(name) => {
-                write!(f, "the file name {name:?} appears twice in this target's rows")
+                write!(
+                    f,
+                    "the file name {name:?} appears twice in this target's rows"
+                )
             }
         }
     }

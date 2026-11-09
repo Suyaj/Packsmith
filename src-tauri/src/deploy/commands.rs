@@ -317,22 +317,20 @@ pub async fn start_deploy(
             .into_iter()
             .find(|e| e.id == history_id)
             .ok_or(history::HistoryError::NotFound(history_id))?;
-        let artifacts_dir = if uploads {
-            if !entry.success {
-                return Err(ApiError::raw(
-                    "build_failed",
-                    "cannot deploy a failed build",
-                ));
-            }
-            Some(
-                entry
-                    .artifacts_dir
-                    .clone()
-                    .ok_or_else(|| ApiError::raw("artifacts_dir_missing", entry.build_id.clone()))?,
-            )
-        } else {
-            None
-        };
+        let artifacts_dir =
+            if uploads {
+                if !entry.success {
+                    return Err(ApiError::raw(
+                        "build_failed",
+                        "cannot deploy a failed build",
+                    ));
+                }
+                Some(entry.artifacts_dir.clone().ok_or_else(|| {
+                    ApiError::raw("artifacts_dir_missing", entry.build_id.clone())
+                })?)
+            } else {
+                None
+            };
         let target_ids: Vec<i64> = assignments.iter().map(|a| a.target_id).collect();
         let mut seen = std::collections::HashSet::new();
         if !target_ids.iter().all(|id| seen.insert(*id)) {
@@ -530,11 +528,7 @@ pub fn auto_chain_after_build(
         let summary = engine::run_deploy(plan, factory, cancel, sink).await;
         // 自动连锁部署同样落部署记录（ticket 12/23，操作 = 重启）；记录失败
         // 不影响部署。
-        let _ = deploy_history::record_outcomes(
-            &store,
-            &summary,
-            engine::DeployOperation::Restart,
-        );
+        let _ = deploy_history::record_outcomes(&store, &summary, engine::DeployOperation::Restart);
         if let Some(reg) = emitter_for_state.try_state::<DeployRegistry>() {
             reg.unregister(deploy_id);
         }
@@ -811,9 +805,11 @@ mod tests {
         std::fs::write(dir.path().join("b.jar"), b"x").unwrap();
         let dir_str = dir.path().to_str().unwrap();
 
-        let artifacts =
-            resolve_entries(dir_str, &[entry("a.jar", "/srv/row"), entry("b.jar", "/srv/default")])
-                .unwrap();
+        let artifacts = resolve_entries(
+            dir_str,
+            &[entry("a.jar", "/srv/row"), entry("b.jar", "/srv/default")],
+        )
+        .unwrap();
         assert_eq!(artifacts.len(), 2);
         assert_eq!(artifacts[0].file_name, "a.jar");
         assert_eq!(artifacts[0].upload_dir, "/srv/row");
@@ -822,8 +818,7 @@ mod tests {
         assert_eq!(artifacts[1].upload_dir, "/srv/default");
 
         // 目录两侧空白规整；空条目列表合法（该目标没有勾选任何构件）。
-        let artifacts =
-            resolve_entries(dir_str, &[entry("a.jar", "  /srv/x  ")]).unwrap();
+        let artifacts = resolve_entries(dir_str, &[entry("a.jar", "  /srv/x  ")]).unwrap();
         assert_eq!(artifacts[0].upload_dir, "/srv/x");
         assert!(resolve_entries(dir_str, &[]).unwrap().is_empty());
     }

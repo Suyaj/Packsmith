@@ -129,7 +129,10 @@ fn create_requires_a_single_nonempty_default_upload_dir() {
             },
         )
         .unwrap_err();
-        assert!(matches!(err, repo::RepoError::EmptyUploadDir), "got {err:?}");
+        assert!(
+            matches!(err, repo::RepoError::EmptyUploadDir),
+            "got {err:?}"
+        );
     }
     let multiline = repo::create(
         &store,
@@ -171,7 +174,10 @@ fn default_upload_dir_round_trips_through_create_and_update() {
     )
     .unwrap();
     assert_eq!(updated.upload_dir, "/srv/other");
-    assert_eq!(repo::get(&store, created.id).unwrap().unwrap().upload_dir, "/srv/other");
+    assert_eq!(
+        repo::get(&store, created.id).unwrap().unwrap().upload_dir,
+        "/srv/other"
+    );
 }
 
 #[test]
@@ -521,15 +527,15 @@ fn migration_v15_backfills_default_upload_dir_from_the_first_row() {
         let project = seed_project(&store, "app");
         let server = seed_server(&store, "web-1");
         let with_rows = repo::create(&store, &new_target(project, server)).unwrap();
-        let bare = repo::create(
-            &store,
-            &new_target(project, seed_server(&store, "web-2")),
-        )
-        .unwrap();
+        let bare =
+            repo::create(&store, &new_target(project, seed_server(&store, "web-2"))).unwrap();
         repo::replace_files(
             &store,
             with_rows.id,
-            &[file_row("app.jar", "/srv/one"), file_row("cfg.jar", "/srv/etc")],
+            &[
+                file_row("app.jar", "/srv/one"),
+                file_row("cfg.jar", "/srv/etc"),
+            ],
         )
         .unwrap();
         // 模拟票 19–25 的真实 v14 形状：upload_dir 列废弃为空、无 v15 回填。
@@ -562,7 +568,9 @@ fn migration_v15_backfills_default_upload_dir_from_the_first_row() {
     let rows = repo::list_files(&store, with_rows.id).unwrap();
     assert_eq!(rows.len(), 2);
     assert_eq!(
-        rows.iter().map(|r| r.file_name.as_str()).collect::<Vec<_>>(),
+        rows.iter()
+            .map(|r| r.file_name.as_str())
+            .collect::<Vec<_>>(),
         vec!["app.jar", "cfg.jar"]
     );
 }
@@ -571,11 +579,9 @@ fn migration_v15_backfills_default_upload_dir_from_the_first_row() {
 fn project_of(store: &Store, name: &str) -> i64 {
     store
         .with(|conn| {
-            conn.query_row(
-                "SELECT id FROM projects WHERE name = ?1",
-                [name],
-                |r| r.get(0),
-            )
+            conn.query_row("SELECT id FROM projects WHERE name = ?1", [name], |r| {
+                r.get(0)
+            })
         })
         .unwrap()
 }
@@ -599,7 +605,10 @@ fn replace_files_accepts_an_empty_row_set() {
 
     // 行级校验不变：空目录 / 多行目录 / 重复具名文件名仍拒绝。
     let empty = repo::replace_files(&store, target.id, &[file_row("a.jar", "  ")]).unwrap_err();
-    assert!(matches!(empty, repo::RepoError::EmptyUploadDir), "got {empty:?}");
+    assert!(
+        matches!(empty, repo::RepoError::EmptyUploadDir),
+        "got {empty:?}"
+    );
     let multiline =
         repo::replace_files(&store, target.id, &[file_row("a.jar", "/a\n/b")]).unwrap_err();
     assert!(
@@ -612,7 +621,10 @@ fn replace_files_accepts_an_empty_row_set() {
         &[file_row("a.jar", "/srv/a"), file_row("a.jar", "/srv/b")],
     )
     .unwrap_err();
-    assert!(matches!(dup, repo::RepoError::DuplicateFileName(_)), "got {dup:?}");
+    assert!(
+        matches!(dup, repo::RepoError::DuplicateFileName(_)),
+        "got {dup:?}"
+    );
 }
 
 #[test]
@@ -634,11 +646,15 @@ fn replace_files_round_trips_rows_in_order() {
     .unwrap();
 
     assert_eq!(
-        rows.iter().map(|r| r.file_name.as_str()).collect::<Vec<_>>(),
+        rows.iter()
+            .map(|r| r.file_name.as_str())
+            .collect::<Vec<_>>(),
         vec!["app-1.0.jar", "", "config.properties"]
     );
     assert_eq!(
-        rows.iter().map(|r| r.upload_dir.as_str()).collect::<Vec<_>>(),
+        rows.iter()
+            .map(|r| r.upload_dir.as_str())
+            .collect::<Vec<_>>(),
         vec!["/srv/app", "/srv/pick-later", "/srv/etc"]
     );
     assert!(rows.iter().enumerate().all(|(i, r)| r.position == i as i64));
@@ -690,9 +706,11 @@ fn row_upload_dirs_must_be_single_nonempty_lines() {
     let server = seed_server(&store, "web-1");
     let target = repo::create(&store, &new_target(project, server)).unwrap();
 
-    let empty = repo::replace_files(&store, target.id, &[file_row("a.jar", "   ")])
-        .unwrap_err();
-    assert!(matches!(empty, repo::RepoError::EmptyUploadDir), "got {empty:?}");
+    let empty = repo::replace_files(&store, target.id, &[file_row("a.jar", "   ")]).unwrap_err();
+    assert!(
+        matches!(empty, repo::RepoError::EmptyUploadDir),
+        "got {empty:?}"
+    );
 
     let multiline =
         repo::replace_files(&store, target.id, &[file_row("a.jar", "/a\n/b")]).unwrap_err();
@@ -702,8 +720,8 @@ fn row_upload_dirs_must_be_single_nonempty_lines() {
     );
 
     // 目录两侧空白会被规整。
-    let rows = repo::replace_files(&store, target.id, &[file_row("  a.jar  ", "  /srv/app  ")])
-        .unwrap();
+    let rows =
+        repo::replace_files(&store, target.id, &[file_row("  a.jar  ", "  /srv/app  ")]).unwrap();
     assert_eq!(rows[0].file_name, "a.jar");
     assert_eq!(rows[0].upload_dir, "/srv/app");
 }
@@ -722,7 +740,11 @@ fn deleting_the_target_cascades_to_its_mapping_rows() {
     assert!(repo::list_files(&store, target.id).unwrap().is_empty());
 
     let orphans: i64 = store
-        .with(|conn| conn.query_row("SELECT count(*) FROM deployment_target_files", [], |r| r.get(0)))
+        .with(|conn| {
+            conn.query_row("SELECT count(*) FROM deployment_target_files", [], |r| {
+                r.get(0)
+            })
+        })
         .unwrap();
     assert_eq!(orphans, 0, "target deletion must cascade to its rows");
 }

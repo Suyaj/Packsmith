@@ -485,10 +485,7 @@ pub fn set_default_artifacts(
     project_id: i64,
     artifacts: &[String],
 ) -> Result<(), ProjectError> {
-    let trimmed: Vec<String> = artifacts
-        .iter()
-        .map(|a| a.trim().to_string())
-        .collect();
+    let trimmed: Vec<String> = artifacts.iter().map(|a| a.trim().to_string()).collect();
     if let Some(bad) = trimmed.iter().find(|a| a.is_empty()) {
         return Err(ProjectError::InvalidArtifact(bad.clone()));
     }

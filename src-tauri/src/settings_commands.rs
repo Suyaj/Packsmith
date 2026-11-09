@@ -93,7 +93,10 @@ fn git_account_dto(store: &Store) -> Result<GitAccountDto, ApiError> {
     let has_token = store_settings::get_git_token(store)
         .map_err(ApiError::from)?
         .is_some();
-    Ok(GitAccountDto { username, has_token })
+    Ok(GitAccountDto {
+        username,
+        has_token,
+    })
 }
 
 fn apply_git_account(
@@ -102,10 +105,7 @@ fn apply_git_account(
     token: Option<String>,
 ) -> Result<GitAccountDto, ApiError> {
     if username.trim().is_empty() {
-        return Err(ApiError::raw(
-            "git_username_required",
-            "Git 用户名不能为空",
-        ));
+        return Err(ApiError::raw("git_username_required", "Git 用户名不能为空"));
     }
     store_settings::set_git_username(store, username).map_err(ApiError::from)?;
     // token 为 None（字段缺席）：保持现有令牌不变（编辑表单令牌留空）。
@@ -193,7 +193,12 @@ fn inject_http_blocker_override(content: &str) -> String {
         // 开标签内部不允许出现 '>'，取其后的第一个 '>' 作为开标签结束。
         if let Some(gt) = content[tag..].find('>') {
             let at = tag + gt + 1;
-            return format!("{}{}{}", &content[..at], HTTP_BLOCKER_OVERRIDE, &content[at..]);
+            return format!(
+                "{}{}{}",
+                &content[..at],
+                HTTP_BLOCKER_OVERRIDE,
+                &content[at..]
+            );
         }
     }
 
@@ -295,8 +300,7 @@ mod git_account_tests {
     use super::*;
     use crate::store::settings as store_settings;
 
-    const TEST_KEY_HEX: &str =
-        "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
+    const TEST_KEY_HEX: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
 
     fn open(dir: &std::path::Path) -> crate::store::Store {
         crate::store::Store::open(&dir.join("test.db"), TEST_KEY_HEX).unwrap()
@@ -362,7 +366,10 @@ mod git_account_tests {
 
         assert_eq!(err.code(), "git_username_required");
         // 校验失败不落库：现有账号原样保留。
-        assert_eq!(store_settings::get_git_username(&store).unwrap().as_deref(), Some("octocat"));
+        assert_eq!(
+            store_settings::get_git_username(&store).unwrap().as_deref(),
+            Some("octocat")
+        );
         assert!(store_settings::get_git_token(&store).unwrap().is_some());
     }
 
@@ -385,8 +392,7 @@ mod git_account_tests {
 mod mvnd_settings_tests {
     use super::*;
 
-    const TEST_KEY_HEX: &str =
-        "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
+    const TEST_KEY_HEX: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
 
     fn open(dir: &std::path::Path) -> crate::store::Store {
         crate::store::Store::open(&dir.join("test.db"), TEST_KEY_HEX).unwrap()
@@ -413,7 +419,9 @@ mod mvnd_settings_tests {
             format!("<settings><mirrors>{HTTP_BLOCKER_OVERRIDE}</mirrors></settings>")
         );
         assert_eq!(
-            store_settings::get_mvnd_settings_xml(&store).unwrap().as_deref(),
+            store_settings::get_mvnd_settings_xml(&store)
+                .unwrap()
+                .as_deref(),
             Some(original)
         );
     }
@@ -513,8 +521,7 @@ mod http_blocker_inject_tests {
     /// 用户已自定义同名 id（大小写/空白不敏感）→ 原样物化，不重复注入。
     #[test]
     fn 已自定义blocker_id时原样返回() {
-        let content =
-            "<settings><mirrors><mirror><id> MAVEN-DEFAULT-HTTP-BLOCKER </id>\
+        let content = "<settings><mirrors><mirror><id> MAVEN-DEFAULT-HTTP-BLOCKER </id>\
              <mirrorOf>*</mirrorOf><blocked>false</blocked></mirror></mirrors></settings>";
 
         assert_eq!(inject_http_blocker_override(content), content);
@@ -545,7 +552,9 @@ mod http_blocker_inject_tests {
         apply_mvnd_settings(&store, &appdata, Some(original)).unwrap();
 
         assert_eq!(
-            crate::store::settings::get_mvnd_settings_xml(&store).unwrap().as_deref(),
+            crate::store::settings::get_mvnd_settings_xml(&store)
+                .unwrap()
+                .as_deref(),
             Some(original)
         );
         let on_disk = std::fs::read_to_string(settings_xml_path(&appdata)).unwrap();

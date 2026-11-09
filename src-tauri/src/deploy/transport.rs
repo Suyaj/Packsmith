@@ -376,6 +376,9 @@ mod tests {
 
     #[test]
     fn plain_command_is_wrapped_unchanged() {
-        assert_eq!(wrap_sh_c("sh start.sh --prod"), "sh -c 'sh start.sh --prod'");
+        assert_eq!(
+            wrap_sh_c("sh start.sh --prod"),
+            "sh -c 'sh start.sh --prod'"
+        );
     }
 }

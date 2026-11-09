@@ -6,7 +6,7 @@ use tauri::State;
 
 use crate::commands::ApiError;
 use crate::store::Store;
-use crate::targets::repo::{self, NewTarget, NewTargetFile, Target, RepoError};
+use crate::targets::repo::{self, NewTarget, NewTargetFile, RepoError, Target};
 
 /// Targets 错误 → IPC `{code, message}`：前端按 code 选 i18n 文案。
 impl From<RepoError> for ApiError {
@@ -72,13 +72,17 @@ impl TargetDto {
 
 fn file_dtos(store: &Store, target_id: i64) -> Vec<TargetFileDto> {
     repo::list_files(store, target_id)
-        .map(|rows| rows.iter().map(|f| TargetFileDto {
-            id: f.id,
-            target_id: f.target_id,
-            file_name: f.file_name.clone(),
-            upload_dir: f.upload_dir.clone(),
-            position: f.position,
-        }).collect())
+        .map(|rows| {
+            rows.iter()
+                .map(|f| TargetFileDto {
+                    id: f.id,
+                    target_id: f.target_id,
+                    file_name: f.file_name.clone(),
+                    upload_dir: f.upload_dir.clone(),
+                    position: f.position,
+                })
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -115,10 +119,7 @@ pub fn create_deployment_target(
     };
     let created = repo::create(&store, &new)?;
     replace_files(&store, created.id, files.unwrap_or_default())?;
-    Ok(TargetDto::build(
-        &created,
-        file_dtos(&store, created.id),
-    ))
+    Ok(TargetDto::build(&created, file_dtos(&store, created.id)))
 }
 
 #[tauri::command]

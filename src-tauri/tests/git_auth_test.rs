@@ -7,7 +7,7 @@
 //!   报错中止而不是无限重试
 //! - git2 Auth 错误 → 明确的中文可定位错误（引导去 设置 → Git 账号）
 
-use git2::{Cred, CredentialType, ErrorCode, ErrorClass};
+use git2::{Cred, CredentialType, ErrorClass, ErrorCode};
 
 use packsmith_lib::git_auth::{AuthAttempt, GitCredentials, is_ssh_url};
 use packsmith_lib::store::projects::ProjectError;
@@ -63,9 +63,16 @@ fn configured_credentials_select_userpass_plaintext() {
 fn second_auth_prompt_aborts_instead_of_looping() {
     // 凭据被拒时 libgit2 会再次回调；继续给同样的凭据会无限循环。
     let attempt = AuthAttempt::new();
-    assert!(attempt.try_credential(&creds(), None, None, CredentialType::USER_PASS_PLAINTEXT).is_ok());
+    assert!(
+        attempt
+            .try_credential(&creds(), None, None, CredentialType::USER_PASS_PLAINTEXT)
+            .is_ok()
+    );
     let second = attempt.try_credential(&creds(), None, None, CredentialType::USER_PASS_PLAINTEXT);
-    assert!(second.is_err(), "第二次提示必须报错中止（凭据已被服务器拒绝）");
+    assert!(
+        second.is_err(),
+        "第二次提示必须报错中止（凭据已被服务器拒绝）"
+    );
 }
 
 #[test]

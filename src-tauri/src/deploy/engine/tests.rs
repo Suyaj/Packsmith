@@ -804,7 +804,11 @@ async fn empty_command_groups_are_no_op_success() {
     let (_dir, path) = tmp_artifact("a.jar", b"x");
     let (factory, mocks) = make_factory(vec![], vec![]);
     let summary = run(
-        plan(vec![artifact(&path, "/a")], DeployOperation::Restart, vec![job(1, "", "")]),
+        plan(
+            vec![artifact(&path, "/a")],
+            DeployOperation::Restart,
+            vec![job(1, "", "")],
+        ),
         factory,
     )
     .await;

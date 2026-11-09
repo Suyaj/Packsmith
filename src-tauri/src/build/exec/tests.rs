@@ -157,8 +157,7 @@ fn settings_xml存在时追加_s参数_顺序在依赖仓库参数之后() {
     let repo = PathBuf::from("/appdata/m2-repo");
     let settings = PathBuf::from("/appdata/mvnd-settings.xml");
 
-    let spec =
-        build_spawn_spec("mvnd package -DskipTests", &repo, Some(&settings), &tc).unwrap();
+    let spec = build_spawn_spec("mvnd package -DskipTests", &repo, Some(&settings), &tc).unwrap();
 
     assert_eq!(
         spec.args,
@@ -203,7 +202,11 @@ fn 用户命令已含_s_短参数时不重复追加() {
     let count = spec.args.iter().filter(|a| a.as_str() == "-s").count();
     assert_eq!(count, 1, "用户已手写 -s 时不得重复追加");
     assert!(spec.args.contains(&"/my/own/settings.xml".to_string()));
-    assert!(!spec.args.contains(&"/appdata/mvnd-settings.xml".to_string()));
+    assert!(
+        !spec
+            .args
+            .contains(&"/appdata/mvnd-settings.xml".to_string())
+    );
 }
 
 #[test]
@@ -220,7 +223,11 @@ fn 用户命令已含_settings_长参数时不重复追加() {
     )
     .unwrap();
 
-    assert!(!spec.args.contains(&"/appdata/mvnd-settings.xml".to_string()));
+    assert!(
+        !spec
+            .args
+            .contains(&"/appdata/mvnd-settings.xml".to_string())
+    );
     assert!(spec.args.contains(&"--settings".to_string()));
 }
 
@@ -230,8 +237,17 @@ fn 附着写法的_s参数也被识别为已显式给出() {
     let repo = PathBuf::from("/appdata/m2-repo");
     let settings = PathBuf::from("/appdata/mvnd-settings.xml");
 
-    let spec = build_spawn_spec("mvnd package -s=/my/settings.xml", &repo, Some(&settings), &tc)
-        .unwrap();
+    let spec = build_spawn_spec(
+        "mvnd package -s=/my/settings.xml",
+        &repo,
+        Some(&settings),
+        &tc,
+    )
+    .unwrap();
 
-    assert!(!spec.args.contains(&"/appdata/mvnd-settings.xml".to_string()));
+    assert!(
+        !spec
+            .args
+            .contains(&"/appdata/mvnd-settings.xml".to_string())
+    );
 }

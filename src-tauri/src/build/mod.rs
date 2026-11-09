@@ -232,9 +232,14 @@ pub fn prepare_workspace_in(
 
     // 打包 clone 同样使用已配置的 Git 账号（ticket 13）；查找失败按匿名。
     let creds = crate::git_auth::credentials_from_store(store);
-    if let Err(e) =
-        projects::clone_repo(&url, &dest, Some(branch), on_progress, cancel, creds.as_ref())
-    {
+    if let Err(e) = projects::clone_repo(
+        &url,
+        &dest,
+        Some(branch),
+        on_progress,
+        cancel,
+        creds.as_ref(),
+    ) {
         // 失败不留残留（验收：临时工作区被清理）。
         let _ = std::fs::remove_dir_all(&dest);
         return Err(e);
@@ -468,9 +473,8 @@ pub async fn run_build_flow_in(
         // 私服依赖（ticket 18）：settings.xml 已物化才追加 -s，spawn 侧不查盘。
         let settings_xml = crate::settings_commands::settings_xml_path(appdata);
         let settings_arg = settings_xml.exists().then_some(settings_xml.as_path());
-        let spec =
-            exec::build_spawn_spec(&project.build_command, &repo_local, settings_arg, &tc)
-                .inspect_err(|e| log.write(&format!("[Packsmith] 构建命令无效: {e}")))?;
+        let spec = exec::build_spawn_spec(&project.build_command, &repo_local, settings_arg, &tc)
+            .inspect_err(|e| log.write(&format!("[Packsmith] 构建命令无效: {e}")))?;
 
         let on_log = {
             let log = log.clone();
