@@ -15,6 +15,7 @@ Packsmith 是一个打包的桌面应用（当前支持 Java 打包，后续支�
 
 - **Git worktrees**: 所有实现用 worktree 一律放在 `/Users/wyy/RustRoverProjects/Packsmith-worktrees/` 下（命名如 `Packsmith-worktrees/ticket-07-build-execution`），不要放在仓库同级目录。分支随票命名 `ticket/NN-slug`，基于 `integration/packsmith-v1`。
 - **探索笔记**：实现前先读 `/Users/wyy/RustRoverProjects/Packsmith-notes/` 中对应主题的笔记（仓库外共享目录）。
+- **版本管理**：版本号单一来源为根目录 `.env` 的 `APP_VERSION`，`npm run sync-version` 同步到 package.json / package-lock.json / Cargo.toml / Cargo.lock（tauri.conf.json 不存版本号，自动回退 Cargo.toml）。发版用 `npm version x.y.z`，会回写 `.env` 并打进同一提交和 `v*` 标签。
 
 ## Agent skills
 

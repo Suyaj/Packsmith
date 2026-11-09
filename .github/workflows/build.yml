@@ -33,6 +33,10 @@ jobs:
           node-version: 20
           cache: npm
 
+      # 版本号单一来源为 .env，构建前校验各文件已同步（防止改漏导致安装包版本错乱）
+      - name: 版本号一致性检查
+        run: node scripts/sync-version.mjs --check
+
       - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@stable
         with:
